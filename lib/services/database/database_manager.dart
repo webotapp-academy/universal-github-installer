@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import '../../core/constants/supported_technologies.dart';
@@ -25,6 +26,153 @@ class DatabaseInstance {
 }
 
 class DatabaseManager {
+  static Future<bool> startDatabaseService(
+    DatabaseType type, {
+    void Function(String output, bool isError)? onLine,
+  }) async {
+    if (await testConnection(type: type)) {
+      onLine?.call('MySQL service is already running on port 3306', false);
+      return true;
+    }
+
+    if (type == DatabaseType.mysql || type == DatabaseType.mariadb) {
+      onLine?.call('Starting MySQL / MariaDB service on 127.0.0.1:3306...', false);
+
+      if (Platform.isMacOS) {
+        final home = Platform.environment['HOME'] ?? '';
+        final plistPath = p.join(home, 'Library', 'LaunchAgents', 'com.webotapp.mysql.plist');
+        if (File(plistPath).existsSync()) {
+          await Process.run('launchctl', ['load', plistPath]);
+        }
+
+        final xamppMysqld = File('/Applications/XAMPP/xamppfiles/sbin/mysqld');
+        if (xamppMysqld.existsSync()) {
+          final webotappDir = p.join(home, '.local', 'share', 'webotapp');
+          final datadir = p.join(webotappDir, 'mysql_data');
+          final cnfFile = File(p.join(webotappDir, 'my.cnf'));
+          final sockPath = p.join(webotappDir, 'mysql.sock');
+
+          if (!cnfFile.existsSync()) {
+            cnfFile.parent.createSync(recursive: true);
+            Directory(datadir).createSync(recursive: true);
+            cnfFile.writeAsStringSync('''[mysqld]
+basedir=/Applications/XAMPP/xamppfiles
+datadir=$datadir
+port=3306
+socket=$sockPath
+innodb_data_home_dir=$datadir
+innodb_log_group_home_dir=$datadir
+lc_messages_dir=/Applications/XAMPP/xamppfiles/share/mysql
+''');
+            final user = Platform.environment['USER'] ?? 'root';
+            await Process.run('/Applications/XAMPP/xamppfiles/bin/mysql_install_db', [
+              '--defaults-file=${cnfFile.path}',
+              '--user=$user',
+            ]);
+          }
+
+          await Process.start(
+            xamppMysqld.path,
+            ['--defaults-file=${cnfFile.path}'],
+            mode: ProcessStartMode.detached,
+          );
+        }
+
+        await Process.run('brew', ['services', 'start', 'mysql']);
+      } else if (Platform.isWindows) {
+        await Process.run('net', ['start', 'mysql']);
+        await Process.run('net', ['start', 'mariadb']);
+        final xamppWin = File(r'C:\xampp\mysql\bin\mysqld.exe');
+        if (xamppWin.existsSync()) {
+          await Process.start(
+            xamppWin.path,
+            [r'--defaults-file=C:\xampp\mysql\bin\my.ini', '--standalone'],
+            mode: ProcessStartMode.detached,
+          );
+        }
+      } else if (Platform.isLinux) {
+        await Process.run('sudo', ['systemctl', 'start', 'mysql']);
+      }
+
+      for (int i = 0; i < 20; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (await testConnection(type: DatabaseType.mysql)) {
+          onLine?.call('✓ MySQL service started and responding on port 3306', false);
+          return true;
+        }
+      }
+      onLine?.call('⚠️ Timed out waiting for MySQL service to start on port 3306', true);
+      return false;
+    }
+    return false;
+  }
+
+  static Future<bool> stopDatabaseService(
+    DatabaseType type, {
+    void Function(String output, bool isError)? onLine,
+  }) async {
+    if (type == DatabaseType.mysql || type == DatabaseType.mariadb) {
+      onLine?.call('Stopping MySQL / MariaDB service...', false);
+      if (Platform.isMacOS) {
+        final home = Platform.environment['HOME'] ?? '';
+        final plistPath = p.join(home, 'Library', 'LaunchAgents', 'com.webotapp.mysql.plist');
+        if (File(plistPath).existsSync()) {
+          await Process.run('launchctl', ['unload', plistPath]);
+        }
+        final sockPath = p.join(home, '.local', 'share', 'webotapp', 'mysql.sock');
+        final xamppAdmin = File('/Applications/XAMPP/xamppfiles/bin/mysqladmin');
+        if (xamppAdmin.existsSync()) {
+          await Process.run(xamppAdmin.path, ['-S', sockPath, '-u', 'root', 'shutdown']);
+        }
+        await Process.run('pkill', ['-f', 'mysqld.*my.cnf']);
+        await Process.run('brew', ['services', 'stop', 'mysql']);
+      } else if (Platform.isWindows) {
+        await Process.run('net', ['stop', 'mysql']);
+        await Process.run('net', ['stop', 'mariadb']);
+        await Process.run('taskkill', ['/F', '/IM', 'mysqld.exe']);
+      } else if (Platform.isLinux) {
+        await Process.run('sudo', ['systemctl', 'stop', 'mysql']);
+      }
+
+      for (int i = 0; i < 15; i++) {
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (!await testConnection(type: DatabaseType.mysql)) {
+          onLine?.call('✓ MySQL service stopped successfully', false);
+          return true;
+        }
+      }
+      return false;
+    }
+    return false;
+  }
+
+  static Future<List<String>> listDatabases({
+    String host = '127.0.0.1',
+    int port = 3306,
+    String username = 'root',
+    String password = '',
+  }) async {
+    try {
+      final script =
+          '\$h="$host";\$p=$port;\$u="$username";\$pw="$password";'
+          'try {'
+          '\$pdo = new PDO("mysql:host=\$h;port=\$p", \$u, \$pw);'
+          '\$stmt = \$pdo->query("SHOW DATABASES");'
+          '\$dbs = \$stmt->fetchAll(PDO::FETCH_COLUMN);'
+          'echo json_encode(\$dbs);'
+          '} catch(Exception \$e) { echo "[]"; }';
+      final res = await CommandRunner.run('php', ['-r', script]);
+      if (res.isSuccess && res.stdout.trim().startsWith('[')) {
+        final raw = jsonDecode(res.stdout.trim()) as List<dynamic>;
+        return raw
+            .map((e) => e.toString())
+            .where((db) => !['information_schema', 'performance_schema', 'mysql', 'sys'].contains(db))
+            .toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
   static Future<bool> ensureDatabaseExists({
     required String databaseName,
     String host = '127.0.0.1',
@@ -103,7 +251,14 @@ class DatabaseManager {
         'DATABASE_URL': 'sqlite://$dbPath',
       };
     } else if (dbType == DatabaseType.mysql || dbType == DatabaseType.mariadb) {
-      final mysqlUp = await testConnection(type: DatabaseType.mysql, port: 3306);
+      var mysqlUp = await testConnection(type: DatabaseType.mysql, port: 3306);
+      if (!mysqlUp) {
+        if (onLine != null) {
+          onLine('ℹ️ MySQL service not active on port 3306. Attempting automated startup...', false);
+        }
+        mysqlUp = await startDatabaseService(DatabaseType.mysql, onLine: onLine);
+      }
+
       if (mysqlUp) {
         if (onLine != null) {
           onLine('Configuring and provisioning MySQL/MariaDB database: $sanitizedName...', false);
@@ -126,7 +281,7 @@ class DatabaseManager {
         };
       } else {
         if (onLine != null) {
-          onLine('ℹ️ MySQL not active on port 3306. Configuring isolated SQLite database for zero-config startup.', false);
+          onLine('⚠️ Could not start MySQL. Configuring isolated SQLite database for zero-config fallback.', false);
         }
         final dbPath = p.join(project.localPath, 'database', 'database.sqlite');
         final dbFile = File(dbPath);

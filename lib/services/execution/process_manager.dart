@@ -303,11 +303,39 @@ class ProcessManager {
           final dbName = dbNameMatch?.group(1)?.trim();
 
           if (dbConn == 'mysql' && dbName != null && dbName.isNotEmpty) {
-            final dbReady = await DatabaseManager.ensureDatabaseExists(
-              databaseName: dbName,
-              onLine: logHandler,
-            );
-            if (dbReady) {
+            var isMysqlRunning = await DatabaseManager.testConnection(type: DatabaseType.mysql, port: 3306);
+            if (!isMysqlRunning) {
+              logHandler('ℹ️ MySQL daemon is not running on 127.0.0.1:3306. Attempting automated startup...', false);
+              isMysqlRunning = await DatabaseManager.startDatabaseService(DatabaseType.mysql, onLine: logHandler);
+            }
+
+            if (isMysqlRunning) {
+              final dbReady = await DatabaseManager.ensureDatabaseExists(
+                databaseName: dbName,
+                onLine: logHandler,
+              );
+              if (dbReady) {
+                await CommandRunner.run('php', ['artisan', 'migrate', '--force'], workingDirectory: project.localPath, onLine: logHandler);
+                final seeder = File(p.join(project.localPath, 'database', 'seeders', 'DatabaseSeeder.php'));
+                final legacySeeder = File(p.join(project.localPath, 'database', 'seeds', 'DatabaseSeeder.php'));
+                if (seeder.existsSync() || legacySeeder.existsSync()) {
+                  await CommandRunner.run('php', ['artisan', 'db:seed', '--force'], workingDirectory: project.localPath, onLine: logHandler);
+                }
+              }
+            } else {
+              logHandler('⚠️ MySQL daemon unavailable. Falling back to SQLite database...', false);
+              final sqlitePath = p.join(project.localPath, 'database', 'database.sqlite');
+              final sqliteFile = File(sqlitePath);
+              if (!sqliteFile.existsSync()) {
+                sqliteFile.parent.createSync(recursive: true);
+                sqliteFile.createSync();
+              }
+              // Update .env with SQLite config
+              var updatedContent = content
+                  .replaceAll(RegExp(r'^DB_CONNECTION=.*$', multiLine: true), 'DB_CONNECTION=sqlite')
+                  .replaceAll(RegExp(r'^DB_DATABASE=.*$', multiLine: true), 'DB_DATABASE=$sqlitePath');
+              envFile.writeAsStringSync(updatedContent);
+              await CommandRunner.run('php', ['artisan', 'config:clear'], workingDirectory: project.localPath, onLine: logHandler);
               await CommandRunner.run('php', ['artisan', 'migrate', '--force'], workingDirectory: project.localPath, onLine: logHandler);
               final seeder = File(p.join(project.localPath, 'database', 'seeders', 'DatabaseSeeder.php'));
               final legacySeeder = File(p.join(project.localPath, 'database', 'seeds', 'DatabaseSeeder.php'));

@@ -183,3 +183,4 @@ class WebotAppCatalogService {
     return defaultCatalog;
   }
 }
+
