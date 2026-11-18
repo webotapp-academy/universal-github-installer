@@ -54,12 +54,16 @@ jobs:
       - name: Package macOS App (ZIP & DMG)
         run: |
           mkdir -p dist
+          APP_PATH=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -n 1)
+          APP_NAME=$(basename "$APP_PATH")
+          echo "Found app bundle: $APP_NAME at $APP_PATH"
+          
           cd build/macos/Build/Products/Release
-          zip -r ../../../../../dist/github-installer-macos-universal.zip github_installer.app
+          zip -r "../../../../../dist/WebotApp-Universal-GitHub-Installer-macOS.zip" "$APP_NAME"
           cd ../../../../../
           
           # Create DMG using hdiutil
-          hdiutil create -volname "GitHub Installer" -srcfolder build/macos/Build/Products/Release/github_installer.app -ov -format UDZO dist/github-installer-macos.dmg
+          hdiutil create -volname "WebotApp Universal GitHub Installer" -srcfolder "$APP_PATH" -ov -format UDZO "dist/WebotApp-Universal-GitHub-Installer-macOS.dmg"
 
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@v4
@@ -90,7 +94,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist
-          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\github-installer-windows-x64-portable.zip
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\WebotApp-Universal-GitHub-Installer-Windows-x64.zip
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
