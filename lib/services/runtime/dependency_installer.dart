@@ -5,8 +5,10 @@ import 'package:path/path.dart' as p;
 import '../../core/constants/supported_technologies.dart';
 import '../../core/models/installation_plan.dart';
 import '../../core/models/project.dart';
+import '../../core/models/runtime_info.dart';
 import '../../core/utils/command_runner.dart';
 import '../database/database_manager.dart';
+import 'portable_runtime_manager.dart';
 
 class DependencyInstaller {
   static void ensureEnvAndKey(String projectPath, {int port = 8000, void Function(String, bool)? onLine}) {
@@ -349,6 +351,9 @@ class DependencyInstaller {
     required void Function(String output, bool isError) onLine,
     required Future<bool> Function(InstallationStep step) requestApproval,
   }) async {
+    // Bootstrap any missing portable runtimes needed by this plan
+    await _ensurePlanRuntimes(plan, onLine: onLine);
+
     // Pre-execution environment setup (guarantee .env and APP_KEY for Laravel/PHP)
     if (File(p.join(project.localPath, 'artisan')).existsSync() || File(p.join(project.localPath, '.env.example')).existsSync()) {
       ensureEnvAndKey(project.localPath, port: project.port, onLine: onLine);
@@ -381,5 +386,36 @@ class DependencyInstaller {
       }
     }
     return true;
+  }
+
+  static Future<void> _ensurePlanRuntimes(
+    InstallationPlan plan, {
+    required void Function(String output, bool isError) onLine,
+  }) async {
+    final commands = <String>{
+      plan.startCommand,
+      ...plan.steps.map((s) => s.command),
+    };
+
+    final needed = <RuntimeType>{};
+    for (final raw in commands) {
+      final cmd = p.basenameWithoutExtension(raw).toLowerCase();
+      if (cmd == 'node' || cmd == 'npm' || cmd == 'npx' || cmd == 'pnpm' || cmd == 'yarn') {
+        needed.add(RuntimeType.node);
+      } else if (cmd == 'php') {
+        needed.add(RuntimeType.php);
+      } else if (cmd == 'composer') {
+        needed.add(RuntimeType.php);
+        needed.add(RuntimeType.composer);
+      } else if (cmd == 'uv') {
+        needed.add(RuntimeType.uv);
+      }
+    }
+
+    for (final runtime in needed) {
+      if (PortableRuntimeManager.supportsPortableInstall(runtime)) {
+        await PortableRuntimeManager.ensureRuntime(runtime, onProgress: onLine);
+      }
+    }
   }
 }

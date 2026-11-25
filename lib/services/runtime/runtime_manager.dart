@@ -120,11 +120,12 @@ class RuntimeManager {
       final res = await CommandRunner.run(cmd, args);
       if (res.isSuccess) {
         final versionLine = (res.stdout.isNotEmpty ? res.stdout : res.stderr).split('\n').first.trim();
+        final resolvedPath = CommandRunner.resolveExecutable(cmd);
         return RuntimeInfo(
           type: type,
           isInstalled: true,
           version: versionLine,
-          binaryPath: cmd,
+          binaryPath: resolvedPath,
           installCommandWindows: winInstall,
           installCommandMac: macInstall,
         );

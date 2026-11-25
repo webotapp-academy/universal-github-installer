@@ -5,8 +5,10 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/models/runtime_info.dart';
 import '../../core/storage/secure_storage.dart';
 import '../../core/utils/command_runner.dart';
+import '../runtime/portable_runtime_manager.dart';
 
 class RepoMetadata {
   final String owner;
@@ -140,6 +142,12 @@ class GitHubService {
       cloneUrl = cloneUrl.replaceFirst('https://', 'https://$token@');
     }
 
+    final gitCheck = await CommandRunner.run('git', ['--version']);
+    if (!gitCheck.isSuccess && PortableRuntimeManager.supportsPortableInstall(RuntimeType.git)) {
+      onProgress?.call('⚙️ Git not found on system. Bootstrapping portable Git into app environment...', false);
+      await PortableRuntimeManager.ensureRuntime(RuntimeType.git, onProgress: onProgress);
+    }
+
     final result = await CommandRunner.run(
       'git',
       ['clone', '--depth', '1', cloneUrl, targetDir],
@@ -182,6 +190,7 @@ class GitHubService {
     ];
 
     http.Response? response;
+    final failureReasons = <String>[];
     for (final candidate in candidateUrls) {
       try {
         final res = await client.get(Uri.parse(candidate), headers: headers);
@@ -189,11 +198,20 @@ class GitHubService {
           response = res;
           break;
         }
-      } catch (_) {}
+        failureReasons.add('HTTP ${res.statusCode} ($candidate)');
+      } catch (e) {
+        failureReasons.add('$e ($candidate)');
+      }
     }
 
     if (response == null || response.statusCode != 200) {
-      throw Exception('Could not clone via Git and could not download ZIP archive from GitHub. Please install Git or check your network connection.');
+      final has404 = failureReasons.any((r) => r.contains('HTTP 404'));
+      final hint = has404 && (token == null || token.isEmpty)
+          ? ' If this is a private repository, add a GitHub Personal Access Token in Settings.'
+          : '';
+      throw Exception(
+        'Could not clone via Git and could not download ZIP archive from GitHub (${failureReasons.join("; ")}).$hint',
+      );
     }
 
     onProgress?.call('⚡ Extracting project files into $targetDir...', false);

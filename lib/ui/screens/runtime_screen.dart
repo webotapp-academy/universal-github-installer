@@ -6,6 +6,7 @@ import '../../core/models/process_status.dart';
 import '../../core/models/runtime_info.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/command_runner.dart';
+import '../../services/runtime/portable_runtime_manager.dart';
 import '../../state/runtime_provider.dart';
 import '../widgets/terminal_view.dart';
 
@@ -98,21 +99,35 @@ class _RuntimeScreenState extends State<RuntimeScreen> {
       },
     );
 
-    final parts = commandStr.split(' ');
-    final cmd = parts.first;
-    final args = parts.sublist(1);
+    final isPortable = PortableRuntimeManager.supportsPortableInstall(info.type);
+    if (isPortable) {
+      await PortableRuntimeManager.ensureRuntime(
+        info.type,
+        onProgress: (line, isError) {
+          logs.add(LogEntry(
+            timestamp: DateTime.now(),
+            text: line,
+            isError: isError,
+          ));
+        },
+      );
+    } else {
+      final parts = commandStr.split(' ');
+      final cmd = parts.first;
+      final args = parts.sublist(1);
 
-    await CommandRunner.run(
-      cmd,
-      args,
-      onLine: (line, isError) {
-        logs.add(LogEntry(
-          timestamp: DateTime.now(),
-          text: line,
-          isError: isError,
-        ));
-      },
-    );
+      await CommandRunner.run(
+        cmd,
+        args,
+        onLine: (line, isError) {
+          logs.add(LogEntry(
+            timestamp: DateTime.now(),
+            text: line,
+            isError: isError,
+          ));
+        },
+      );
+    }
 
     status = 'Finished executing install script for ${info.type.displayName}';
     isDone = true;

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
+import '../../services/runtime/portable_runtime_manager.dart';
 
 class CommandResult {
   final int exitCode;
@@ -32,6 +33,9 @@ class CommandRunner {
         searchDirs.add(p.join(workingDirectory, '.venv', 'bin'));
       }
     }
+
+    // App-managed isolated portable runtimes (Windows & macOS)
+    searchDirs.addAll(PortableRuntimeManager.getManagedBinDirectories());
 
     searchDirs.addAll([
       p.join(home, '.local', 'bin'),
