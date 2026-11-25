@@ -1,4 +1,10 @@
-# Universal GitHub Project Installer & Local Development Manager
+# WebotApp Universal GitHub Project Installer & Local Development Manager
+
+[![Download macOS DMG](https://img.shields.io/badge/Download-macOS%20DMG%20(v1.1.0)-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/webotapp-academy/universal-github-installer/raw/release-downloads/WebotApp-Universal-GitHub-Installer-macOS.dmg)
+[![Direct Download](https://img.shields.io/badge/Direct%20Download-macOS%20Installer-success?style=for-the-badge)](https://github.com/webotapp-academy/universal-github-installer/raw/release-downloads/WebotApp-Universal-GitHub-Installer-macOS.dmg)
+
+> 🍏 **[Click here to Download WebotApp-Universal-GitHub-Installer-macOS.dmg (20 MB)](https://github.com/webotapp-academy/universal-github-installer/raw/release-downloads/WebotApp-Universal-GitHub-Installer-macOS.dmg)**  
+> *Ready-to-use release installer for macOS (Apple Silicon M1/M2/M3/M4 & Intel).*
 
 A production-ready, open-source desktop application for macOS and Windows built with Flutter that allows anyone to install, manage, execute, test, and expose multiple GitHub projects through one intuitive interface.
 
