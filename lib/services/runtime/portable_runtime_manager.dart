@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
@@ -152,16 +153,11 @@ class PortableRuntimeManager {
     void Function(String output, bool isError)? onProgress,
   }) async {
     onProgress?.call('📦 Fetching latest portable MinGit release info...', false);
-    final res = await http.get(
-      Uri.parse('https://api.github.com/repos/git-for-windows/git/releases/latest'),
-      headers: {'User-Agent': _userAgent},
+    final body = await _fetchText(
+      'https://api.github.com/repos/git-for-windows/git/releases/latest',
     );
-    if (res.statusCode != 200) {
-      onProgress?.call('✗ GitHub API returned ${res.statusCode} while looking up MinGit.', true);
-      return false;
-    }
 
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = jsonDecode(body) as Map<String, dynamic>;
     final assets = (data['assets'] as List<dynamic>? ?? []);
     String? downloadUrl;
     String? assetName;
@@ -184,7 +180,7 @@ class PortableRuntimeManager {
     }
 
     onProgress?.call('⬇️ Downloading $assetName into app environment...', false);
-    final bytes = await _downloadBytes(downloadUrl);
+    final bytes = await downloadBytes(downloadUrl);
     final targetDir = p.join(getRuntimesRootDir(), 'git');
     await _extractZip(bytes, targetDir);
     onProgress?.call('✓ Portable Git installed in app environment.', false);
@@ -195,21 +191,16 @@ class PortableRuntimeManager {
     void Function(String output, bool isError)? onProgress,
   }) async {
     onProgress?.call('📦 Resolving latest Node.js LTS portable build...', false);
-    final sumsRes = await http.get(
-      Uri.parse('https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt'),
-      headers: {'User-Agent': _userAgent},
+    final sumsBody = await _fetchText(
+      'https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt',
     );
-    if (sumsRes.statusCode != 200) {
-      onProgress?.call('✗ Node.js dist returned ${sumsRes.statusCode}.', true);
-      return false;
-    }
 
     final arch = await _getMacArch();
     final pattern = Platform.isWindows
         ? RegExp(r'(node-v22\.\d+\.\d+-win-x64\.zip)')
         : RegExp('node-v22\\.\\d+\\.\\d+-darwin-$arch\\.tar\\.gz');
 
-    final match = pattern.firstMatch(sumsRes.body);
+    final match = pattern.firstMatch(sumsBody);
     if (match == null) {
       onProgress?.call('✗ Could not locate Node.js v22 archive for this platform.', true);
       return false;
@@ -218,7 +209,7 @@ class PortableRuntimeManager {
     final fileName = match.group(0)!;
     final url = 'https://nodejs.org/dist/latest-v22.x/$fileName';
     onProgress?.call('⬇️ Downloading $fileName into app environment...', false);
-    final bytes = await _downloadBytes(url);
+    final bytes = await downloadBytes(url);
     final targetDir = p.join(getRuntimesRootDir(), 'node');
 
     if (Platform.isWindows) {
@@ -242,7 +233,7 @@ class PortableRuntimeManager {
     final url = 'https://github.com/astral-sh/uv/releases/latest/download/$asset';
 
     onProgress?.call('⬇️ Downloading $asset into app environment...', false);
-    final bytes = await _downloadBytes(url);
+    final bytes = await downloadBytes(url);
     final targetDir = p.join(getRuntimesRootDir(), 'uv');
 
     if (Platform.isWindows) {
@@ -263,16 +254,11 @@ class PortableRuntimeManager {
 
     if (Platform.isWindows) {
       onProgress?.call('📦 Fetching latest PHP Windows portable build...', false);
-      final res = await http.get(
-        Uri.parse('https://windows.php.net/downloads/releases/releases.json'),
-        headers: {'User-Agent': _userAgent},
+      final body = await _fetchText(
+        'https://windows.php.net/downloads/releases/releases.json',
       );
-      if (res.statusCode != 200) {
-        onProgress?.call('✗ windows.php.net returned ${res.statusCode}.', true);
-        return false;
-      }
 
-      final releases = jsonDecode(res.body) as Map<String, dynamic>;
+      final releases = jsonDecode(body) as Map<String, dynamic>;
       String? zipName;
       for (final versionKey in ['8.3', '8.4', '8.2']) {
         final entry = releases[versionKey] as Map<String, dynamic>?;
@@ -297,7 +283,7 @@ class PortableRuntimeManager {
 
       final url = 'https://windows.php.net/downloads/releases/$zipName';
       onProgress?.call('⬇️ Downloading $zipName into app environment...', false);
-      final bytes = await _downloadBytes(url);
+      final bytes = await downloadBytes(url);
       await _extractZip(bytes, targetDir);
       await _configureWindowsPhpIni(targetDir);
     } else if (Platform.isMacOS) {
@@ -306,7 +292,7 @@ class PortableRuntimeManager {
       final url =
           'https://dl.static-php.dev/static-php-cli/common/php-8.3.14-cli-macos-$spcArch.tar.gz';
       onProgress?.call('⬇️ Downloading static PHP 8.3 for macOS ($spcArch)...', false);
-      final bytes = await _downloadBytes(url);
+      final bytes = await downloadBytes(url);
       await _extractTarGz(bytes, targetDir);
       await _makeBinariesExecutable(targetDir);
     }
@@ -351,7 +337,7 @@ class PortableRuntimeManager {
     }
 
     onProgress?.call('⬇️ Downloading composer.phar into app environment...', false);
-    final bytes = await _downloadBytes('https://getcomposer.org/download/latest-stable/composer.phar');
+    final bytes = await downloadBytes('https://getcomposer.org/download/latest-stable/composer.phar');
     final targetDir = Directory(p.join(getRuntimesRootDir(), 'composer'));
     if (!targetDir.existsSync()) {
       await targetDir.create(recursive: true);
@@ -383,7 +369,7 @@ class PortableRuntimeManager {
 
     if (Platform.isWindows) {
       onProgress?.call('⬇️ Downloading cloudflared.exe into app environment...', false);
-      final bytes = await _downloadBytes(
+      final bytes = await downloadBytes(
         'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
       );
       await File(p.join(targetDir.path, 'cloudflared.exe')).writeAsBytes(bytes);
@@ -391,7 +377,7 @@ class PortableRuntimeManager {
       final arch = await _getMacArch();
       final asset = arch == 'arm64' ? 'cloudflared-darwin-arm64.tgz' : 'cloudflared-darwin-amd64.tgz';
       onProgress?.call('⬇️ Downloading $asset into app environment...', false);
-      final bytes = await _downloadBytes(
+      final bytes = await downloadBytes(
         'https://github.com/cloudflare/cloudflared/releases/latest/download/$asset',
       );
       await _extractTarGz(bytes, targetDir.path);
@@ -402,15 +388,68 @@ class PortableRuntimeManager {
     return await _isRuntimeAvailable(RuntimeType.cloudflared);
   }
 
-  static Future<List<int>> _downloadBytes(String url) async {
-    final res = await http.get(
-      Uri.parse(url),
-      headers: {'User-Agent': _userAgent},
-    );
-    if (res.statusCode != 200) {
-      throw Exception('Download failed ($url): HTTP ${res.statusCode}');
+  static Future<String> _fetchText(String url) async {
+    final bytes = await downloadBytes(url);
+    return utf8.decode(bytes);
+  }
+
+  static Future<Uint8List> downloadBytes(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
+    final mergedHeaders = <String, String>{
+      'User-Agent': _userAgent,
+      ...?headers,
+    };
+    try {
+      final res = await http.get(
+        Uri.parse(url),
+        headers: mergedHeaders,
+      );
+      if (res.statusCode != 200) {
+        throw Exception('Download failed ($url): HTTP ${res.statusCode}');
+      }
+      return res.bodyBytes;
+    } on HandshakeException {
+      return await _downloadBytesViaSystemCurl(url, headers: headers);
+    } on TlsException {
+      return await _downloadBytesViaSystemCurl(url, headers: headers);
     }
-    return res.bodyBytes;
+  }
+
+  /// Falls back to the OS native `curl` (Schannel on Windows, SecureTransport on macOS)
+  /// when Dart's bundled BoringSSL cannot verify a corporate/antivirus root CA.
+  static Future<Uint8List> _downloadBytesViaSystemCurl(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
+    final tempDir = await Directory.systemTemp.createTemp('webotapp_dl_');
+    final outFile = File(p.join(tempDir.path, 'payload.bin'));
+    try {
+      final curlExe = Platform.isWindows ? 'curl.exe' : '/usr/bin/curl';
+      final args = <String>[
+        '-fsSL',
+        if (Platform.isWindows) '--ssl-no-revoke',
+        '-A',
+        _userAgent,
+        if (headers != null)
+          for (final entry in headers.entries) ...['-H', '${entry.key}: ${entry.value}'],
+        '-o',
+        outFile.path,
+        url,
+      ];
+      final res = await Process.run(curlExe, args);
+      if (res.exitCode != 0 || !outFile.existsSync()) {
+        throw Exception(
+          'System curl failed for $url (exit ${res.exitCode}): ${res.stderr}',
+        );
+      }
+      return await outFile.readAsBytes();
+    } finally {
+      try {
+        await tempDir.delete(recursive: true);
+      } catch (_) {}
+    }
   }
 
   static Future<void> _extractZip(

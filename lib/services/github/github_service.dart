@@ -150,7 +150,14 @@ class GitHubService {
 
     final result = await CommandRunner.run(
       'git',
-      ['clone', '--depth', '1', cloneUrl, targetDir],
+      [
+        if (Platform.isWindows) ...['-c', 'http.sslBackend=schannel'],
+        'clone',
+        '--depth',
+        '1',
+        cloneUrl,
+        targetDir,
+      ],
       onLine: onProgress,
     );
 
@@ -177,7 +184,6 @@ class GitHubService {
   }) async {
     onProgress?.call('📦 Git command not available. Downloading repository ZIP archive from GitHub...', false);
 
-    final client = http.Client();
     final headers = <String, String>{
       'User-Agent': 'WebotApp-Universal-GitHub-Installer',
       if (token != null && token.isNotEmpty) 'Authorization': 'token $token',
@@ -189,22 +195,24 @@ class GitHubService {
       'https://api.github.com/repos/$owner/$repo/zipball',
     ];
 
-    http.Response? response;
+    List<int>? zipBytes;
     final failureReasons = <String>[];
     for (final candidate in candidateUrls) {
       try {
-        final res = await client.get(Uri.parse(candidate), headers: headers);
-        if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
-          response = res;
+        final bytes = await PortableRuntimeManager.downloadBytes(
+          candidate,
+          headers: headers,
+        );
+        if (bytes.isNotEmpty) {
+          zipBytes = bytes;
           break;
         }
-        failureReasons.add('HTTP ${res.statusCode} ($candidate)');
       } catch (e) {
         failureReasons.add('$e ($candidate)');
       }
     }
 
-    if (response == null || response.statusCode != 200) {
+    if (zipBytes == null) {
       final has404 = failureReasons.any((r) => r.contains('HTTP 404'));
       final hint = has404 && (token == null || token.isEmpty)
           ? ' If this is a private repository, add a GitHub Personal Access Token in Settings.'
@@ -216,7 +224,7 @@ class GitHubService {
 
     onProgress?.call('⚡ Extracting project files into $targetDir...', false);
 
-    final archive = ZipDecoder().decodeBytes(response.bodyBytes);
+    final archive = ZipDecoder().decodeBytes(zipBytes);
     final targetDirObj = Directory(targetDir);
     if (!await targetDirObj.exists()) {
       await targetDirObj.create(recursive: true);
