@@ -19,6 +19,7 @@ class RunningScreen extends StatefulWidget {
 
 class _RunningScreenState extends State<RunningScreen> {
   String? _selectedProjectId;
+  String? _lastAppSelectedId;
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +29,12 @@ class _RunningScreenState extends State<RunningScreen> {
 
     final allProjects = projectsProvider.projects;
 
-    if (_selectedProjectId == null && allProjects.isNotEmpty) {
+    if (appState.selectedProjectId != null && appState.selectedProjectId != _lastAppSelectedId) {
+      _lastAppSelectedId = appState.selectedProjectId;
+      _selectedProjectId = appState.selectedProjectId;
+    }
+    if ((_selectedProjectId == null || projectsProvider.getProjectById(_selectedProjectId) == null) &&
+        allProjects.isNotEmpty) {
       _selectedProjectId = appState.selectedProjectId ?? allProjects.first.id;
     }
 
@@ -197,6 +203,34 @@ class _RunningScreenState extends State<RunningScreen> {
                     ],
                   ),
                 ),
+
+              if (currentProject != null &&
+                  currentProject.status == ProjectState.error &&
+                  currentProject.lastError != null &&
+                  currentProject.lastError!.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppTheme.errorRed.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.errorRed.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline, color: AppTheme.errorRed, size: 18),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          currentProject.lastError!,
+                          style: const TextStyle(color: AppTheme.errorRed, fontSize: 12.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
 
               const SizedBox(height: 14),
 

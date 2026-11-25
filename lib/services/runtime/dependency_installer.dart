@@ -118,7 +118,8 @@ class DependencyInstaller {
             args: ['artisan', 'config:clear'],
             workingDirectory: path,
           ));
-          if (File(p.join(path, 'package.json')).existsSync()) {
+          final packageJsonFile = File(p.join(path, 'package.json'));
+          if (packageJsonFile.existsSync()) {
             steps.add(InstallationStep(
               id: 'npm_install',
               title: 'Install Frontend Dependencies',
@@ -127,14 +128,24 @@ class DependencyInstaller {
               args: ['install'],
               workingDirectory: path,
             ));
-            steps.add(InstallationStep(
-              id: 'npm_build',
-              title: 'Build Production Frontend Assets',
-              description: 'Run npm run build to compile Vite / Tailwind assets',
-              command: 'npm',
-              args: ['run', 'build'],
-              workingDirectory: path,
-            ));
+            bool hasBuildScript = false;
+            try {
+              final pkgJson = jsonDecode(packageJsonFile.readAsStringSync());
+              final scripts = pkgJson['scripts'];
+              if (scripts is Map && scripts.containsKey('build')) {
+                hasBuildScript = true;
+              }
+            } catch (_) {}
+            if (hasBuildScript) {
+              steps.add(InstallationStep(
+                id: 'npm_build',
+                title: 'Build Production Frontend Assets',
+                description: 'Run npm run build to compile Vite / Tailwind assets',
+                command: 'npm',
+                args: ['run', 'build'],
+                workingDirectory: path,
+              ));
+            }
           }
           steps.add(InstallationStep(
             id: 'artisan_migrate',
@@ -352,7 +363,10 @@ class DependencyInstaller {
     required Future<bool> Function(InstallationStep step) requestApproval,
   }) async {
     // Bootstrap any missing portable runtimes needed by this plan
-    await _ensurePlanRuntimes(plan, onLine: onLine);
+    final runtimesOk = await _ensurePlanRuntimes(plan, onLine: onLine);
+    if (!runtimesOk) {
+      return false;
+    }
 
     // Pre-execution environment setup (guarantee .env and APP_KEY for Laravel/PHP)
     if (File(p.join(project.localPath, 'artisan')).existsSync() || File(p.join(project.localPath, '.env.example')).existsSync()) {
@@ -388,9 +402,9 @@ class DependencyInstaller {
     return true;
   }
 
-  static Future<void> _ensurePlanRuntimes(
+  static Future<bool> _ensurePlanRuntimes(
     InstallationPlan plan, {
-    required void Function(String output, bool isError) onLine,
+    required void Function(String output, bool isError)? onLine,
   }) async {
     final commands = <String>{
       plan.startCommand,
@@ -414,8 +428,16 @@ class DependencyInstaller {
 
     for (final runtime in needed) {
       if (PortableRuntimeManager.supportsPortableInstall(runtime)) {
-        await PortableRuntimeManager.ensureRuntime(runtime, onProgress: onLine);
+        final ok = await PortableRuntimeManager.ensureRuntime(runtime, onProgress: onLine);
+        if (!ok) {
+          onLine?.call(
+            '✗ Required runtime "${runtime.displayName}" is not available and could not be bootstrapped.',
+            true,
+          );
+          return false;
+        }
       }
     }
+    return true;
   }
 }

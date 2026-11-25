@@ -12,19 +12,14 @@ class PortDetector {
   }
 
   static Future<bool> isPortListening(int port, {Duration timeout = const Duration(milliseconds: 500)}) async {
-    try {
-      final socket = await Socket.connect('127.0.0.1', port, timeout: timeout);
-      socket.destroy();
-      return true;
-    } catch (_) {
+    for (final host in ['127.0.0.1', '::1', 'localhost']) {
       try {
-        final socket = await Socket.connect('localhost', port, timeout: timeout);
+        final socket = await Socket.connect(host, port, timeout: timeout);
         socket.destroy();
         return true;
-      } catch (_) {
-        return false;
-      }
+      } catch (_) {}
     }
+    return false;
   }
 
   static Future<bool> isHttpResponsive(String url, {Duration timeout = const Duration(seconds: 2)}) async {
@@ -48,14 +43,17 @@ class PortDetector {
     return startPort; // Fallback
   }
 
-  static Future<bool> waitForPort(int port, {Duration timeout = const Duration(seconds: 15)}) async {
+  static Future<bool> waitForPort(
+    int port, {
+    Duration timeout = const Duration(seconds: 15),
+    bool Function()? isProcessAlive,
+  }) async {
     final stopwatch = Stopwatch()..start();
     while (stopwatch.elapsed < timeout) {
-      if (await isPortListening(port)) {
-        return true;
+      if (isProcessAlive != null && !isProcessAlive()) {
+        return false;
       }
-      final inUse = await isPortInUse(port);
-      if (inUse) {
+      if (await isPortListening(port)) {
         return true;
       }
       await Future.delayed(const Duration(milliseconds: 300));

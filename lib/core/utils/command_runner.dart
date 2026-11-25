@@ -170,6 +170,75 @@ class CommandRunner {
     return merged;
   }
 
+  static Future<Process> _spawnProcess(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+  }) async {
+    final resolvedExecutable = resolveExecutable(executable, workingDirectory: workingDirectory);
+    final env = getEnhancedEnvironment(environment, workingDirectory);
+
+    if (Platform.isWindows) {
+      final lower = resolvedExecutable.toLowerCase();
+      // Direct .exe execution avoids cmd.exe space-quoting bugs and preserves real child PID
+      if (lower.endsWith('.exe')) {
+        return Process.start(
+          resolvedExecutable,
+          arguments,
+          workingDirectory: workingDirectory,
+          environment: env,
+          runInShell: false,
+        );
+      }
+      // .cmd/.bat wrappers or unresolved shell commands run via cmd.exe /d /c
+      if (lower.endsWith('.cmd') || lower.endsWith('.bat')) {
+        return Process.start(
+          Platform.environment['ComSpec'] ?? 'cmd.exe',
+          ['/d', '/c', resolvedExecutable, ...arguments],
+          workingDirectory: workingDirectory,
+          environment: env,
+          runInShell: false,
+        );
+      }
+      return Process.start(
+        resolvedExecutable,
+        arguments,
+        workingDirectory: workingDirectory,
+        environment: env,
+        runInShell: true,
+      );
+    }
+
+    // On macOS/Linux, run resolved absolute binaries directly without a shell wrapper
+    final isResolvedPath = resolvedExecutable.contains(Platform.pathSeparator);
+    return Process.start(
+      resolvedExecutable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: env,
+      runInShell: !isResolvedPath,
+    );
+  }
+
+  /// Terminates a process and its descendants (important on Windows for cmd/npm trees).
+  static Future<void> killProcessTree(Process process) async {
+    try {
+      if (Platform.isWindows) {
+        await Process.run('taskkill', ['/F', '/T', '/PID', '${process.pid}']);
+      } else {
+        final killed = process.kill(ProcessSignal.sigterm);
+        if (!killed) {
+          process.kill(ProcessSignal.sigkill);
+        }
+      }
+    } catch (_) {
+      try {
+        process.kill(ProcessSignal.sigkill);
+      } catch (_) {}
+    }
+  }
+
   static Future<CommandResult> run(
     String executable,
     List<String> arguments, {
@@ -178,15 +247,11 @@ class CommandRunner {
     void Function(String output, bool isError)? onLine,
   }) async {
     try {
-      final resolvedExecutable = resolveExecutable(executable, workingDirectory: workingDirectory);
-      final env = getEnhancedEnvironment(environment, workingDirectory);
-
-      final process = await Process.start(
-        resolvedExecutable,
+      final process = await _spawnProcess(
+        executable,
         arguments,
         workingDirectory: workingDirectory,
-        environment: env,
-        runInShell: true,
+        environment: environment,
       );
 
       final stdoutBuffer = StringBuffer();
@@ -195,7 +260,7 @@ class CommandRunner {
       final stdoutDone = Completer<void>();
       final stderrDone = Completer<void>();
 
-      process.stdout.transform(utf8.decoder).listen((data) {
+      process.stdout.transform(const Utf8Decoder(allowMalformed: true)).listen((data) {
         stdoutBuffer.write(data);
         if (onLine != null) {
           for (final line in data.split('\n')) {
@@ -204,7 +269,7 @@ class CommandRunner {
         }
       }, onDone: () => stdoutDone.complete());
 
-      process.stderr.transform(utf8.decoder).listen((data) {
+      process.stderr.transform(const Utf8Decoder(allowMalformed: true)).listen((data) {
         stderrBuffer.write(data);
         if (onLine != null) {
           for (final line in data.split('\n')) {
@@ -240,18 +305,14 @@ class CommandRunner {
     Map<String, String>? environment,
     required void Function(String line, bool isError) onLine,
   }) async {
-    final resolvedExecutable = resolveExecutable(executable, workingDirectory: workingDirectory);
-    final env = getEnhancedEnvironment(environment, workingDirectory);
-
-    final process = await Process.start(
-      resolvedExecutable,
+    final process = await _spawnProcess(
+      executable,
       arguments,
       workingDirectory: workingDirectory,
-      environment: env,
-      runInShell: true,
+      environment: environment,
     );
 
-    process.stdout.transform(utf8.decoder).listen((data) {
+    process.stdout.transform(const Utf8Decoder(allowMalformed: true)).listen((data) {
       for (final line in data.split('\n')) {
         if (line.trim().isNotEmpty) {
           onLine(line, false);
@@ -259,7 +320,7 @@ class CommandRunner {
       }
     });
 
-    process.stderr.transform(utf8.decoder).listen((data) {
+    process.stderr.transform(const Utf8Decoder(allowMalformed: true)).listen((data) {
       for (final line in data.split('\n')) {
         if (line.trim().isNotEmpty) {
           onLine(line, true);

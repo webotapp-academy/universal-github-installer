@@ -8,6 +8,7 @@ import '../../services/github/repo_analyzer.dart';
 import '../../state/app_state.dart';
 import '../../state/process_provider.dart';
 import '../../state/projects_provider.dart';
+import '../../state/runtime_provider.dart';
 import '../widgets/command_approval_dialog.dart';
 import '../widgets/terminal_view.dart';
 
@@ -88,6 +89,7 @@ class _InstallScreenState extends State<InstallScreen> {
     if (projectsProvider.isBusy) return;
 
     final processProvider = context.read<ProcessProvider>();
+    final runtimeProvider = context.read<RuntimeProvider>();
     final appState = context.read<AppState>();
 
     final projectName = _nameController.text.trim().isNotEmpty
@@ -110,6 +112,9 @@ class _InstallScreenState extends State<InstallScreen> {
         },
       );
 
+      // Refresh detected runtimes in case portable binaries were bootstrapped
+      runtimeProvider.refresh();
+
       if (project.status != ProjectState.ready) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -122,20 +127,37 @@ class _InstallScreenState extends State<InstallScreen> {
         return;
       }
 
-      final started = await projectsProvider.startProject(project, processProvider);
+      final started = await projectsProvider.startProject(
+        project,
+        processProvider,
+        streamToInstallLogs: true,
+      );
       if (started) {
         projectsProvider.markInstallCompleted(project.name);
       } else {
-        projectsProvider.markInstallFailed('Installed, but failed to start server');
+        projectsProvider.markInstallFailed(
+          project.lastError ?? 'Installed, but server failed to bind port ${project.port}',
+        );
       }
 
-      if (mounted && started) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: AppTheme.successGreen,
-            content: Text('✓ ${project.name} installed and started successfully!'),
-          ),
-        );
+      if (mounted) {
+        if (started) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppTheme.successGreen,
+              content: Text('✓ ${project.name} installed and listening on port ${project.port}!'),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppTheme.errorRed,
+              content: Text(
+                '${project.name} installed, but failed to start on port ${project.port}. Check live console logs.',
+              ),
+            ),
+          );
+        }
         appState.setTab(NavigationTab.runningProjects, projectId: project.id);
       }
     } catch (e) {

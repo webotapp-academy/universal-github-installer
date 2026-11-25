@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../core/constants/supported_technologies.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/catalog/webotapp_catalog_service.dart';
 import '../../state/app_state.dart';
@@ -40,7 +41,10 @@ class _WebotAppCatalogSectionState extends State<WebotAppCatalogSection> {
     final projectsProvider = context.watch<ProjectsProvider>();
     final isDark = appState.isDarkMode;
 
-    final installedNames = projectsProvider.projects.map((p) => p.name.toLowerCase()).toSet();
+    final installedNames = projectsProvider.projects
+        .where((p) => p.status != ProjectState.error && p.status != ProjectState.notInstalled)
+        .map((p) => p.name.toLowerCase())
+        .toSet();
 
     final filteredList = _catalog.where((item) {
       if (_selectedFilter == 'All') return true;

@@ -259,19 +259,33 @@ class ProjectsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> startProject(Project project, ProcessProvider processProvider) async {
+  Future<bool> startProject(
+    Project project,
+    ProcessProvider processProvider, {
+    bool streamToInstallLogs = false,
+  }) async {
     project.status = ProjectState.starting;
     notifyListeners();
 
     final started = await _processManager.startProject(
       project,
-      onLog: (line, isError) => processProvider.addLog(project.id, line, isError),
+      onLog: (line, isError) {
+        processProvider.addLog(project.id, line, isError);
+        if (streamToInstallLogs) {
+          _emitInstallLog(line, isError);
+        }
+      },
+      onStatusChanged: (newStatus) async {
+        project.status = newStatus;
+        await _db.saveProject(project);
+        notifyListeners();
+      },
     );
 
-    if (started) {
+    if (started && _processManager.isRunning(project.id)) {
       project.status = ProjectState.running;
       project.lastStartedAt = DateTime.now();
-    } else {
+    } else if (!started) {
       project.status = ProjectState.error;
     }
 

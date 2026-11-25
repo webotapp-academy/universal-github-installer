@@ -285,7 +285,24 @@ class PortableRuntimeManager {
       onProgress?.call('⬇️ Downloading $zipName into app environment...', false);
       final bytes = await downloadBytes(url);
       await _extractZip(bytes, targetDir);
-      await _configureWindowsPhpIni(targetDir);
+      await _configureWindowsPhpIni(targetDir, onProgress: onProgress);
+
+      // Verify PHP actually launches (checks missing Visual C++ Redistributable DLLs)
+      final check = await CommandRunner.run('php', ['--version']);
+      if (!check.isSuccess) {
+        if (check.exitCode == -1073741515 || check.exitCode == 3221225781) {
+          onProgress?.call(
+            '✗ Portable PHP failed to start (missing VCRUNTIME140.dll). Please install Microsoft Visual C++ Redistributable (x64): https://aka.ms/vs/17/release/vc_redist.x64.exe',
+            true,
+          );
+        } else {
+          onProgress?.call(
+            '✗ Portable PHP health check failed (exit ${check.exitCode}): ${check.stderr}',
+            true,
+          );
+        }
+        return false;
+      }
     } else if (Platform.isMacOS) {
       final arch = await _getMacArch();
       final spcArch = arch == 'arm64' ? 'aarch64' : 'x86_64';
@@ -301,14 +318,18 @@ class PortableRuntimeManager {
     return await _isRuntimeAvailable(RuntimeType.php);
   }
 
-  static Future<void> _configureWindowsPhpIni(String phpDir) async {
+  static Future<void> _configureWindowsPhpIni(
+    String phpDir, {
+    void Function(String output, bool isError)? onProgress,
+  }) async {
     final iniFile = File(p.join(phpDir, 'php.ini'));
-    if (iniFile.existsSync()) return;
-
     final prodIni = File(p.join(phpDir, 'php.ini-production'));
-    if (!prodIni.existsSync()) return;
+    if (!iniFile.existsSync() && !prodIni.existsSync()) return;
 
-    var content = await prodIni.readAsString();
+    var content = iniFile.existsSync()
+        ? await iniFile.readAsString()
+        : await prodIni.readAsString();
+
     content = content.replaceFirst(';extension_dir = "ext"', 'extension_dir = "ext"');
     for (final ext in [
       'curl',
@@ -322,6 +343,32 @@ class PortableRuntimeManager {
     ]) {
       content = content.replaceFirst(';extension=$ext', 'extension=$ext');
     }
+
+    // Bundle Mozilla CA bundle so Composer & PHP HTTPS requests succeed on Windows
+    try {
+      final sslDir = Directory(p.join(phpDir, 'extras', 'ssl'));
+      if (!sslDir.existsSync()) {
+        await sslDir.create(recursive: true);
+      }
+      final caFile = File(p.join(sslDir.path, 'cacert.pem'));
+      if (!caFile.existsSync()) {
+        onProgress?.call('🔒 Installing TLS root CA bundle for PHP & Composer...', false);
+        final caBytes = await downloadBytes('https://curl.se/ca/cacert.pem');
+        await caFile.writeAsBytes(caBytes);
+      }
+      final caPath = caFile.path.replaceAll('\\', '/');
+      if (content.contains(';curl.cainfo =')) {
+        content = content.replaceFirst(';curl.cainfo =', 'curl.cainfo = "$caPath"');
+      } else if (!content.contains('curl.cainfo =')) {
+        content += '\ncurl.cainfo = "$caPath"\n';
+      }
+      if (content.contains(';openssl.cafile=')) {
+        content = content.replaceFirst(';openssl.cafile=', 'openssl.cafile = "$caPath"');
+      } else if (!content.contains('openssl.cafile')) {
+        content += '\nopenssl.cafile = "$caPath"\n';
+      }
+    } catch (_) {}
+
     await iniFile.writeAsString(content);
   }
 

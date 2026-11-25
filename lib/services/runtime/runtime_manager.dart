@@ -117,10 +117,22 @@ class RuntimeManager {
     }
 
     try {
+      final resolvedPath = CommandRunner.resolveExecutable(cmd);
+      // Skip Windows Store app execution alias stubs unless they execute cleanly
+      if (Platform.isWindows &&
+          resolvedPath.toLowerCase().contains(r'\microsoft\windowsapps\')) {
+        return RuntimeInfo(
+          type: type,
+          isInstalled: false,
+          installCommandWindows: winInstall,
+          installCommandMac: macInstall,
+        );
+      }
+
       final res = await CommandRunner.run(cmd, args);
-      if (res.isSuccess) {
-        final versionLine = (res.stdout.isNotEmpty ? res.stdout : res.stderr).split('\n').first.trim();
-        final resolvedPath = CommandRunner.resolveExecutable(cmd);
+      final combinedOutput = (res.stdout.isNotEmpty ? res.stdout : res.stderr).trim();
+      final versionLine = combinedOutput.isEmpty ? '' : combinedOutput.split('\n').first.trim();
+      if (res.isSuccess && versionLine.isNotEmpty) {
         return RuntimeInfo(
           type: type,
           isInstalled: true,

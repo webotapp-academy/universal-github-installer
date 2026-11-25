@@ -121,7 +121,8 @@ class ProcessManager {
           onLine: logHandler,
         );
         if (!res.isSuccess) {
-          logHandler('⚠️ Warning: "$pkgMgr install" exited with code ${res.exitCode}. Output:\n${res.stderr}', true);
+          logHandler('✗ "$pkgMgr install" exited with code ${res.exitCode}. Output:\n${res.stderr}', true);
+          return false;
         } else {
           logHandler('✓ Dependencies installed successfully.', false);
         }
@@ -136,16 +137,28 @@ class ProcessManager {
       if (force || !venvDir.existsSync()) {
         logHandler('📦 Python virtual environment not found. Creating .venv...', false);
         final pyCmd = Platform.isWindows ? 'python' : 'python3';
-        await CommandRunner.run(pyCmd, ['-m', 'venv', '.venv'], workingDirectory: localPath, onLine: logHandler);
+        final venvRes = await CommandRunner.run(pyCmd, ['-m', 'venv', '.venv'], workingDirectory: localPath, onLine: logHandler);
+        if (!venvRes.isSuccess) {
+          logHandler('✗ Failed to create Python .venv (exit ${venvRes.exitCode}).', true);
+          return false;
+        }
         final venvPip = Platform.isWindows
             ? p.join(localPath, '.venv', 'Scripts', 'pip.exe')
             : p.join(localPath, '.venv', 'bin', 'pip');
         if (reqTxt.existsSync()) {
           logHandler('Installing Python dependencies from requirements.txt...', false);
-          await CommandRunner.run(venvPip, ['install', '-r', 'requirements.txt'], workingDirectory: localPath, onLine: logHandler);
+          final pipRes = await CommandRunner.run(venvPip, ['install', '-r', 'requirements.txt'], workingDirectory: localPath, onLine: logHandler);
+          if (!pipRes.isSuccess) {
+            logHandler('✗ pip install failed (exit ${pipRes.exitCode}).', true);
+            return false;
+          }
         } else if (pyProj.existsSync()) {
           logHandler('Installing Python package dependencies...', false);
-          await CommandRunner.run(venvPip, ['install', '.'], workingDirectory: localPath, onLine: logHandler);
+          final pipRes = await CommandRunner.run(venvPip, ['install', '.'], workingDirectory: localPath, onLine: logHandler);
+          if (!pipRes.isSuccess) {
+            logHandler('✗ pip install failed (exit ${pipRes.exitCode}).', true);
+            return false;
+          }
         }
         logHandler('✓ Python environment configured.', false);
       }
@@ -157,12 +170,16 @@ class ProcessManager {
       final vendorDir = Directory(p.join(localPath, 'vendor'));
       if (force || !vendorDir.existsSync()) {
         logHandler('📦 Composer vendor folder not found. Running "composer install"...', false);
-        await CommandRunner.run(
+        final compRes = await CommandRunner.run(
           'composer',
           ['install', '--no-interaction', '--prefer-dist'],
           workingDirectory: localPath,
           onLine: logHandler,
         );
+        if (!compRes.isSuccess || !vendorDir.existsSync()) {
+          logHandler('✗ Composer install failed (exit ${compRes.exitCode}). Cannot start PHP application without vendor/.', true);
+          return false;
+        }
         logHandler('✓ Composer dependencies installed.', false);
       }
     }
@@ -231,6 +248,7 @@ class ProcessManager {
   Future<bool> startProject(
     Project project, {
     void Function(String line, bool isError)? onLog,
+    void Function(ProjectState newStatus)? onStatusChanged,
     bool autoOpenBrowser = true,
   }) async {
     final projectId = project.id;
@@ -269,7 +287,13 @@ class ProcessManager {
     }
 
     // Verify dependencies before starting
-    await _ensureDependenciesInstalled(project, logHandler);
+    final depsOk = await _ensureDependenciesInstalled(project, logHandler);
+    if (!depsOk) {
+      project.status = ProjectState.error;
+      project.lastError = 'Required project dependencies failed to install.';
+      onStatusChanged?.call(ProjectState.error);
+      return false;
+    }
 
     final isLaravel = File(p.join(project.localPath, 'artisan')).existsSync();
 
@@ -330,10 +354,16 @@ class ProcessManager {
                 sqliteFile.parent.createSync(recursive: true);
                 sqliteFile.createSync();
               }
-              // Update .env with SQLite config
-              var updatedContent = content
-                  .replaceAll(RegExp(r'^DB_CONNECTION=.*$', multiLine: true), 'DB_CONNECTION=sqlite')
-                  .replaceAll(RegExp(r'^DB_DATABASE=.*$', multiLine: true), 'DB_DATABASE=$sqlitePath');
+              // Update .env with SQLite config (including commented or missing keys)
+              var updatedContent = content;
+              final connRe = RegExp(r'^#?\s*DB_CONNECTION=.*$', multiLine: true);
+              updatedContent = connRe.hasMatch(updatedContent)
+                  ? updatedContent.replaceFirst(connRe, 'DB_CONNECTION=sqlite')
+                  : '$updatedContent\nDB_CONNECTION=sqlite';
+              final dbRe = RegExp(r'^#?\s*DB_DATABASE=.*$', multiLine: true);
+              updatedContent = dbRe.hasMatch(updatedContent)
+                  ? updatedContent.replaceFirst(dbRe, 'DB_DATABASE=$sqlitePath')
+                  : '$updatedContent\nDB_DATABASE=$sqlitePath';
               envFile.writeAsStringSync(updatedContent);
               await CommandRunner.run('php', ['artisan', 'config:clear'], workingDirectory: project.localPath, onLine: logHandler);
               await CommandRunner.run('php', ['artisan', 'migrate', '--force'], workingDirectory: project.localPath, onLine: logHandler);
@@ -366,30 +396,27 @@ class ProcessManager {
         } catch (_) {}
       }
 
-      // Ensure frontend assets are built so Laravel serves full UI
+      // Ensure frontend assets are built so Laravel serves full UI directly without a hot-reload port conflict
       final packageJson = File(p.join(project.localPath, 'package.json'));
       final publicBuild = Directory(p.join(project.localPath, 'public', 'build'));
+      final publicHot = File(p.join(project.localPath, 'public', 'hot'));
       if (packageJson.existsSync() && !publicBuild.existsSync()) {
-        logHandler('🔨 Compiling frontend assets (npm run build)...', false);
-        await CommandRunner.run('npm', ['run', 'build'], workingDirectory: project.localPath, onLine: logHandler);
-      }
-
-      // Start Vite dev server as a companion process if dev script exists
-      if (packageJson.existsSync() && !_companionProcesses.containsKey(projectId)) {
+        bool hasBuildScript = false;
         try {
-          final pkgContent = packageJson.readAsStringSync();
-          final pkgJson = jsonDecode(pkgContent) as Map<String, dynamic>;
-          final scripts = (pkgJson['scripts'] as Map?) ?? {};
-          if (scripts.containsKey('dev')) {
-            logHandler('⚡ Starting Vite companion dev server for live asset compilation...', false);
-            final viteProc = await CommandRunner.startStreaming(
-              'npm',
-              ['run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173'],
-              workingDirectory: project.localPath,
-              onLine: (line, isErr) => logHandler('[Vite] $line', isErr),
-            );
-            _companionProcesses[projectId] = viteProc;
+          final pkgJson = jsonDecode(packageJson.readAsStringSync());
+          final scripts = pkgJson['scripts'];
+          if (scripts is Map && scripts.containsKey('build')) {
+            hasBuildScript = true;
           }
+        } catch (_) {}
+        if (hasBuildScript) {
+          logHandler('🔨 Compiling frontend assets (npm run build)...', false);
+          await CommandRunner.run('npm', ['run', 'build'], workingDirectory: project.localPath, onLine: logHandler);
+        }
+      }
+      if (publicBuild.existsSync() && publicHot.existsSync()) {
+        try {
+          publicHot.deleteSync();
         } catch (_) {}
       }
     } else if (project.techStack.framework == FrameworkType.vite && !startArgs.contains('--host')) {
@@ -405,40 +432,31 @@ class ProcessManager {
     logHandler('Starting ${project.name} on port ${project.port}...', false);
     logHandler('Command: $startExecutable ${startArgs.join(" ")}', false);
 
-    bool browserOpened = false;
+    bool processExited = false;
+    int? exitCodeResult;
     bool hasAutoRepaired = false;
     bool encounteredCommandNotFound = false;
 
     void processLineHandler(String line, bool isError) {
       logHandler(line, isError);
 
-      // Check for missing command error patterns
       if (line.contains('command not found') ||
+          line.contains('is not recognized') ||
           line.contains('sh: vite:') ||
           line.contains('No such file or directory') ||
           line.contains('Cannot find module')) {
         encounteredCommandNotFound = true;
       }
 
-      // Dynamically detect server bound port from terminal output
-      // e.g. "Local: http://localhost:5173/" or "http://127.0.0.1:8000"
-      if (autoOpenBrowser && !browserOpened) {
-        final urlMatch = RegExp(r'https?:\/\/(?:localhost|127\.0\.0\.1):(\d+)').firstMatch(line);
-        if (urlMatch != null) {
-          final detectedPort = int.tryParse(urlMatch.group(1) ?? '');
-          if (detectedPort != null) {
-            // For Laravel, ignore port 5173 (that is just Vite asset compiler)
-            if (isLaravel && detectedPort == 5173) {
-              // Wait for Laravel server on port 8000
-            } else {
-              if (detectedPort != project.port) {
-                project.port = detectedPort;
-                project.localUrl = 'http://localhost:$detectedPort';
-                logHandler('Detected server running on port $detectedPort. Updated project URL.', false);
-              }
-              browserOpened = true;
-              _openBrowserForProject(project, logHandler);
-            }
+      // Dynamically update bound port if framework picked a different one
+      final urlMatch = RegExp(r'https?:\/\/(?:localhost|127\.0\.0\.1):(\d+)').firstMatch(line);
+      if (urlMatch != null) {
+        final detectedPort = int.tryParse(urlMatch.group(1) ?? '');
+        if (detectedPort != null && !(isLaravel && detectedPort == 5173)) {
+          if (detectedPort != project.port) {
+            project.port = detectedPort;
+            project.localUrl = 'http://localhost:$detectedPort';
+            logHandler('Detected server running on port $detectedPort. Updated project URL.', false);
           }
         }
       }
@@ -481,17 +499,18 @@ class ProcessManager {
         port: project.port,
       );
 
-      project.status = ProjectState.running;
-      project.lastStartedAt = DateTime.now();
-
       // Listen for process exit or crash
       process.exitCode.then((code) async {
+        processExited = true;
+        exitCodeResult = code;
         logHandler('Process exited with code $code', code != 0);
         _runningProcesses.remove(projectId);
         _processInfos.remove(projectId);
 
         if (code != 0) {
           project.status = ProjectState.error;
+          project.lastError = 'Server exited unexpectedly with code $code';
+          onStatusChanged?.call(ProjectState.error);
 
           // AUTOMATIC SELF-HEALING REPAIR
           if (!hasAutoRepaired && (code == 127 || encounteredCommandNotFound)) {
@@ -501,49 +520,58 @@ class ProcessManager {
             final installSuccess = await reinstallDependencies(project, onLog: logHandler);
             if (installSuccess) {
               logHandler('✓ Fix applied successfully. Restarting ${project.name} now...', false);
-              await startProject(project, onLog: onLog, autoOpenBrowser: autoOpenBrowser);
+              await startProject(
+                project,
+                onLog: onLog,
+                onStatusChanged: onStatusChanged,
+                autoOpenBrowser: autoOpenBrowser,
+              );
             } else {
-              logHandler('❌ Automatic repair could not resolve dependencies. Please check package.json.', true);
+              logHandler('❌ Automatic repair could not resolve dependencies.', true);
             }
           }
         } else {
           project.status = ProjectState.ready;
+          onStatusChanged?.call(ProjectState.ready);
         }
       });
 
-      // Poll port & verify health
-      final portBound = await PortDetector.waitForPort(project.port, timeout: const Duration(seconds: 12));
-      if (portBound) {
-        logHandler('✓ Application is healthy and listening on http://localhost:${project.port}', false);
-        _processInfos[projectId]?.isHealthy = true;
+      // Wait until TCP connect succeeds on the target port AND process hasn't exited
+      final portBound = await PortDetector.waitForPort(
+        project.port,
+        timeout: const Duration(seconds: 15),
+        isProcessAlive: () => !processExited && _runningProcesses.containsKey(projectId),
+      );
 
-        if (autoOpenBrowser && !browserOpened) {
-          browserOpened = true;
+      if (portBound && !processExited && _runningProcesses.containsKey(projectId)) {
+        project.status = ProjectState.running;
+        project.lastStartedAt = DateTime.now();
+        project.lastError = null;
+        _processInfos[projectId]?.isHealthy = true;
+        logHandler('✓ Application is healthy and listening on http://localhost:${project.port}', false);
+        onStatusChanged?.call(ProjectState.running);
+
+        if (autoOpenBrowser) {
           await _openBrowserForProject(project, logHandler);
         }
-      } else {
-        // Server did NOT respond within 12 seconds
-        logHandler('⚠️ Server did not bind to port ${project.port} within 12 seconds.', true);
-        if (!hasAutoRepaired && isRunning(projectId)) {
-          hasAutoRepaired = true;
-          logHandler('🔧 Checking if another port was chosen or port is busy...', false);
-          final newPort = await PortDetector.findAvailablePort(startPort: project.port + 1);
-          if (newPort != project.port) {
-            logHandler('Switching to free port $newPort and restarting application...', false);
-            project.port = newPort;
-            project.localUrl = 'http://localhost:$newPort';
-            await stopProject(projectId);
-            await Future.delayed(const Duration(milliseconds: 500));
-            await startProject(project, onLog: onLog, autoOpenBrowser: autoOpenBrowser);
-          }
-        }
+        return true;
       }
 
-      return true;
+      // Server exited early or never bound to the port
+      final reason = processExited
+          ? 'Server process exited before listening (exit code ${exitCodeResult ?? "unknown"}).'
+          : 'Server did not bind to http://localhost:${project.port} within 15 seconds.';
+      logHandler('✗ $reason', true);
+      await stopProject(projectId);
+      project.status = ProjectState.error;
+      project.lastError = reason;
+      onStatusChanged?.call(ProjectState.error);
+      return false;
     } catch (e) {
       logHandler('Failed to start application: $e', true);
       project.status = ProjectState.error;
       project.lastError = e.toString();
+      onStatusChanged?.call(ProjectState.error);
       return false;
     }
   }
@@ -551,25 +579,15 @@ class ProcessManager {
   Future<bool> stopProject(String projectId) async {
     final companion = _companionProcesses.remove(projectId);
     if (companion != null) {
-      try {
-        companion.kill(ProcessSignal.sigterm);
-      } catch (_) {}
+      await CommandRunner.killProcessTree(companion);
     }
 
-    final process = _runningProcesses[projectId];
+    final process = _runningProcesses.remove(projectId);
+    _processInfos.remove(projectId);
     if (process == null) return true;
 
-    try {
-      final killed = process.kill(ProcessSignal.sigterm);
-      if (!killed) {
-        process.kill(ProcessSignal.sigkill);
-      }
-      _runningProcesses.remove(projectId);
-      _processInfos.remove(projectId);
-      return true;
-    } catch (e) {
-      return false;
-    }
+    await CommandRunner.killProcessTree(process);
+    return true;
   }
 
   Future<bool> restartProject(
