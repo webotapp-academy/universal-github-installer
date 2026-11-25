@@ -38,15 +38,18 @@ class DatabaseManager {
     if (type == DatabaseType.mysql || type == DatabaseType.mariadb) {
       onLine?.call('Starting MySQL / MariaDB service on 127.0.0.1:3306...', false);
 
+      bool triggeredStart = false;
       if (Platform.isMacOS) {
         final home = Platform.environment['HOME'] ?? '';
         final plistPath = p.join(home, 'Library', 'LaunchAgents', 'com.webotapp.mysql.plist');
         if (File(plistPath).existsSync()) {
-          await Process.run('launchctl', ['load', plistPath]);
+          final r = await Process.run('launchctl', ['load', plistPath]);
+          if (r.exitCode == 0) triggeredStart = true;
         }
 
         final xamppMysqld = File('/Applications/XAMPP/xamppfiles/sbin/mysqld');
         if (xamppMysqld.existsSync()) {
+          triggeredStart = true;
           final webotappDir = p.join(home, '.local', 'share', 'webotapp');
           final datadir = p.join(webotappDir, 'mysql_data');
           final cnfFile = File(p.join(webotappDir, 'my.cnf'));
@@ -78,12 +81,16 @@ lc_messages_dir=/Applications/XAMPP/xamppfiles/share/mysql
           );
         }
 
-        await Process.run('brew', ['services', 'start', 'mysql']);
+        final brewRes = await Process.run('brew', ['services', 'start', 'mysql']);
+        if (brewRes.exitCode == 0) triggeredStart = true;
       } else if (Platform.isWindows) {
-        await Process.run('net', ['start', 'mysql']);
-        await Process.run('net', ['start', 'mariadb']);
+        final mysqlSvc = await Process.run('net', ['start', 'mysql']);
+        if (mysqlSvc.exitCode == 0) triggeredStart = true;
+        final mariaSvc = await Process.run('net', ['start', 'mariadb']);
+        if (mariaSvc.exitCode == 0) triggeredStart = true;
         final xamppWin = File(r'C:\xampp\mysql\bin\mysqld.exe');
         if (xamppWin.existsSync()) {
+          triggeredStart = true;
           await Process.start(
             xamppWin.path,
             [r'--defaults-file=C:\xampp\mysql\bin\my.ini', '--standalone'],
@@ -91,10 +98,16 @@ lc_messages_dir=/Applications/XAMPP/xamppfiles/share/mysql
           );
         }
       } else if (Platform.isLinux) {
-        await Process.run('sudo', ['systemctl', 'start', 'mysql']);
+        final r = await Process.run('sudo', ['systemctl', 'start', 'mysql']);
+        if (r.exitCode == 0) triggeredStart = true;
       }
 
-      for (int i = 0; i < 20; i++) {
+      if (!triggeredStart) {
+        onLine?.call('ℹ️ No local MySQL/MariaDB service found to start.', false);
+        return false;
+      }
+
+      for (int i = 0; i < 15; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
         if (await testConnection(type: DatabaseType.mysql)) {
           onLine?.call('✓ MySQL service started and responding on port 3306', false);

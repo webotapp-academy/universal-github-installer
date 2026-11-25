@@ -163,6 +163,11 @@ class CommandRunner {
 
     final merged = <String, String>{
       ...Platform.environment,
+      'CI': 'true',
+      'GIT_TERMINAL_PROMPT': '0',
+      'COMPOSER_NO_INTERACTION': '1',
+      'PIP_NO_INPUT': '1',
+      'npm_config_yes': 'true',
       ...?extra,
       'PATH': finalPath, // Guaranteed to have our enhanced searchDirs at the very front
     };
@@ -245,14 +250,21 @@ class CommandRunner {
     String? workingDirectory,
     Map<String, String>? environment,
     void Function(String output, bool isError)? onLine,
+    Duration timeout = const Duration(minutes: 8),
   }) async {
+    Process? process;
     try {
-      final process = await _spawnProcess(
+      process = await _spawnProcess(
         executable,
         arguments,
         workingDirectory: workingDirectory,
         environment: environment,
       );
+
+      // Immediately close stdin so CLI tools never hang waiting for interactive input
+      try {
+        await process.stdin.close();
+      } catch (_) {}
 
       final stdoutBuffer = StringBuffer();
       final stderrBuffer = StringBuffer();
@@ -267,7 +279,9 @@ class CommandRunner {
             if (line.isNotEmpty) onLine(line, false);
           }
         }
-      }, onDone: () => stdoutDone.complete());
+      }, onDone: () {
+        if (!stdoutDone.isCompleted) stdoutDone.complete();
+      });
 
       process.stderr.transform(const Utf8Decoder(allowMalformed: true)).listen((data) {
         stderrBuffer.write(data);
@@ -276,10 +290,25 @@ class CommandRunner {
             if (line.isNotEmpty) onLine(line, true);
           }
         }
-      }, onDone: () => stderrDone.complete());
+      }, onDone: () {
+        if (!stderrDone.isCompleted) stderrDone.complete();
+      });
 
-      final exitCode = await process.exitCode;
-      await Future.wait([stdoutDone.future, stderrDone.future]);
+      final exitCode = await process.exitCode.timeout(
+        timeout,
+        onTimeout: () async {
+          onLine?.call('✗ Command timed out after ${timeout.inSeconds}s: $executable ${arguments.join(" ")}', true);
+          if (process != null) {
+            await killProcessTree(process);
+          }
+          return -2;
+        },
+      );
+
+      await Future.wait([stdoutDone.future, stderrDone.future]).timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => <void>[],
+      );
 
       return CommandResult(
         exitCode: exitCode,
@@ -287,6 +316,9 @@ class CommandRunner {
         stderr: stderrBuffer.toString(),
       );
     } catch (e) {
+      if (process != null) {
+        await killProcessTree(process);
+      }
       if (onLine != null) {
         onLine('Command execution error: $e', true);
       }

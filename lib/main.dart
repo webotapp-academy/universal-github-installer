@@ -9,6 +9,8 @@ import 'state/runtime_provider.dart';
 import 'state/tunnel_provider.dart';
 import 'ui/screens/main_layout.dart';
 
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -41,6 +43,7 @@ class GitHubInstallerApp extends StatelessWidget {
     final appState = context.watch<AppState>();
 
     return MaterialApp(
+      navigatorKey: appNavigatorKey,
       title: AppConstants.appName,
       debugShowCheckedModeBanner: false,
       themeMode: appState.themeMode,

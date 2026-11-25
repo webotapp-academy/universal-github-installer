@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../core/constants/supported_technologies.dart';
 import '../../core/models/installation_plan.dart';
 import '../../core/theme/app_theme.dart';
+import '../../main.dart';
 import '../../services/github/github_service.dart';
 import '../../services/github/repo_analyzer.dart';
 import '../../state/app_state.dart';
@@ -103,8 +104,10 @@ class _InstallScreenState extends State<InstallScreen> {
         analysis: analysis,
         processProvider: processProvider,
         requestApproval: (InstallationStep step) async {
+          final dialogCtx = appNavigatorKey.currentContext ?? (mounted ? context : null);
+          if (dialogCtx == null) return false;
           return await showDialog<bool>(
-                context: context,
+                context: dialogCtx,
                 barrierDismissible: false,
                 builder: (ctx) => CommandApprovalDialog(step: step),
               ) ??

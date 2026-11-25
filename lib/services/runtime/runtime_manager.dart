@@ -129,7 +129,11 @@ class RuntimeManager {
         );
       }
 
-      final res = await CommandRunner.run(cmd, args);
+      final res = await CommandRunner.run(
+        cmd,
+        args,
+        timeout: const Duration(seconds: 15),
+      );
       final combinedOutput = (res.stdout.isNotEmpty ? res.stdout : res.stderr).trim();
       final versionLine = combinedOutput.isEmpty ? '' : combinedOutput.split('\n').first.trim();
       if (res.isSuccess && versionLine.isNotEmpty) {

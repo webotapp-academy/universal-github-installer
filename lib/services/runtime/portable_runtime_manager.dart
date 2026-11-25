@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
@@ -180,7 +182,8 @@ class PortableRuntimeManager {
     }
 
     onProgress?.call('⬇️ Downloading $assetName into app environment...', false);
-    final bytes = await downloadBytes(downloadUrl);
+    final bytes = await downloadBytes(downloadUrl, onProgress: onProgress);
+    onProgress?.call('📦 Extracting $assetName...', false);
     final targetDir = p.join(getRuntimesRootDir(), 'git');
     await _extractZip(bytes, targetDir);
     onProgress?.call('✓ Portable Git installed in app environment.', false);
@@ -209,7 +212,8 @@ class PortableRuntimeManager {
     final fileName = match.group(0)!;
     final url = 'https://nodejs.org/dist/latest-v22.x/$fileName';
     onProgress?.call('⬇️ Downloading $fileName into app environment...', false);
-    final bytes = await downloadBytes(url);
+    final bytes = await downloadBytes(url, onProgress: onProgress);
+    onProgress?.call('📦 Extracting $fileName...', false);
     final targetDir = p.join(getRuntimesRootDir(), 'node');
 
     if (Platform.isWindows) {
@@ -283,7 +287,8 @@ class PortableRuntimeManager {
 
       final url = 'https://windows.php.net/downloads/releases/$zipName';
       onProgress?.call('⬇️ Downloading $zipName into app environment...', false);
-      final bytes = await downloadBytes(url);
+      final bytes = await downloadBytes(url, onProgress: onProgress);
+      onProgress?.call('📦 Extracting $zipName...', false);
       await _extractZip(bytes, targetDir);
       await _configureWindowsPhpIni(targetDir, onProgress: onProgress);
 
@@ -384,7 +389,10 @@ class PortableRuntimeManager {
     }
 
     onProgress?.call('⬇️ Downloading composer.phar into app environment...', false);
-    final bytes = await downloadBytes('https://getcomposer.org/download/latest-stable/composer.phar');
+    final bytes = await downloadBytes(
+      'https://getcomposer.org/download/latest-stable/composer.phar',
+      onProgress: onProgress,
+    );
     final targetDir = Directory(p.join(getRuntimesRootDir(), 'composer'));
     if (!targetDir.existsSync()) {
       await targetDir.create(recursive: true);
@@ -443,24 +451,47 @@ class PortableRuntimeManager {
   static Future<Uint8List> downloadBytes(
     String url, {
     Map<String, String>? headers,
+    void Function(String output, bool isError)? onProgress,
   }) async {
     final mergedHeaders = <String, String>{
       'User-Agent': _userAgent,
       ...?headers,
     };
+    final client = http.Client();
     try {
-      final res = await http.get(
-        Uri.parse(url),
-        headers: mergedHeaders,
-      );
-      if (res.statusCode != 200) {
-        throw Exception('Download failed ($url): HTTP ${res.statusCode}');
+      final request = http.Request('GET', Uri.parse(url))..headers.addAll(mergedHeaders);
+      final streamed = await client.send(request).timeout(const Duration(seconds: 30));
+      if (streamed.statusCode != 200) {
+        throw Exception('Download failed ($url): HTTP ${streamed.statusCode}');
       }
-      return res.bodyBytes;
+
+      final total = streamed.contentLength ?? 0;
+      final builder = BytesBuilder(copy: false);
+      int downloaded = 0;
+      int nextPercentLog = 25;
+
+      await for (final chunk in streamed.stream.timeout(const Duration(seconds: 45))) {
+        builder.add(chunk);
+        downloaded += chunk.length;
+        if (onProgress != null && total > 0) {
+          final pct = ((downloaded * 100) ~/ total);
+          if (pct >= nextPercentLog) {
+            final mbDone = (downloaded / (1024 * 1024)).toStringAsFixed(1);
+            final mbTotal = (total / (1024 * 1024)).toStringAsFixed(1);
+            onProgress('   ↳ $pct% ($mbDone / $mbTotal MB)', false);
+            while (nextPercentLog <= pct) {
+              nextPercentLog += 25;
+            }
+          }
+        }
+      }
+      return builder.takeBytes();
     } on HandshakeException {
       return await _downloadBytesViaSystemCurl(url, headers: headers);
     } on TlsException {
       return await _downloadBytesViaSystemCurl(url, headers: headers);
+    } finally {
+      client.close();
     }
   }
 
@@ -476,6 +507,10 @@ class PortableRuntimeManager {
       final curlExe = Platform.isWindows ? 'curl.exe' : '/usr/bin/curl';
       final args = <String>[
         '-fsSL',
+        '--connect-timeout',
+        '15',
+        '--max-time',
+        '240',
         if (Platform.isWindows) '--ssl-no-revoke',
         '-A',
         _userAgent,
@@ -485,7 +520,7 @@ class PortableRuntimeManager {
         outFile.path,
         url,
       ];
-      final res = await Process.run(curlExe, args);
+      final res = await Process.run(curlExe, args).timeout(const Duration(seconds: 250));
       if (res.exitCode != 0 || !outFile.existsSync()) {
         throw Exception(
           'System curl failed for $url (exit ${res.exitCode}): ${res.stderr}',
@@ -500,32 +535,36 @@ class PortableRuntimeManager {
   }
 
   static Future<void> _extractZip(
-    List<int> bytes,
+    Uint8List bytes,
     String targetDir, {
     bool stripTopLevelDir = false,
   }) async {
-    final archive = ZipDecoder().decodeBytes(bytes);
-    await _writeArchive(archive, targetDir, stripTopLevelDir: stripTopLevelDir);
+    await Isolate.run(() {
+      final archive = ZipDecoder().decodeBytes(bytes);
+      _writeArchiveSync(archive, targetDir, stripTopLevelDir: stripTopLevelDir);
+    });
   }
 
   static Future<void> _extractTarGz(
-    List<int> bytes,
+    Uint8List bytes,
     String targetDir, {
     bool stripTopLevelDir = false,
   }) async {
-    final tarBytes = GZipDecoder().decodeBytes(bytes);
-    final archive = TarDecoder().decodeBytes(tarBytes);
-    await _writeArchive(archive, targetDir, stripTopLevelDir: stripTopLevelDir);
+    await Isolate.run(() {
+      final tarBytes = GZipDecoder().decodeBytes(bytes);
+      final archive = TarDecoder().decodeBytes(tarBytes);
+      _writeArchiveSync(archive, targetDir, stripTopLevelDir: stripTopLevelDir);
+    });
   }
 
-  static Future<void> _writeArchive(
+  static void _writeArchiveSync(
     Archive archive,
     String targetDir, {
     bool stripTopLevelDir = false,
-  }) async {
+  }) {
     final outRoot = Directory(targetDir);
     if (!outRoot.existsSync()) {
-      await outRoot.create(recursive: true);
+      outRoot.createSync(recursive: true);
     }
 
     String? topPrefix;
@@ -547,10 +586,10 @@ class PortableRuntimeManager {
       final destPath = p.join(targetDir, relPath);
       if (entry.isFile) {
         final outFile = File(destPath);
-        await outFile.parent.create(recursive: true);
-        await outFile.writeAsBytes(entry.content as List<int>);
+        outFile.parent.createSync(recursive: true);
+        outFile.writeAsBytesSync(entry.content as List<int>);
       } else {
-        await Directory(destPath).create(recursive: true);
+        Directory(destPath).createSync(recursive: true);
       }
     }
   }

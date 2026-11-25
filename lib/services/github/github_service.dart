@@ -202,6 +202,7 @@ class GitHubService {
         final bytes = await PortableRuntimeManager.downloadBytes(
           candidate,
           headers: headers,
+          onProgress: onProgress,
         );
         if (bytes.isNotEmpty) {
           zipBytes = bytes;

@@ -361,13 +361,16 @@ class DependencyInstaller {
     required Project project,
     required void Function(String output, bool isError) onLine,
     required Future<bool> Function(InstallationStep step) requestApproval,
+    void Function(String stageLabel)? onStageUpdate,
   }) async {
+    onStageUpdate?.call('Checking & provisioning required runtimes...');
     // Bootstrap any missing portable runtimes needed by this plan
     final runtimesOk = await _ensurePlanRuntimes(plan, onLine: onLine);
     if (!runtimesOk) {
       return false;
     }
 
+    onStageUpdate?.call('Configuring .env and provisioning database...');
     // Pre-execution environment setup (guarantee .env and APP_KEY for Laravel/PHP)
     if (File(p.join(project.localPath, 'artisan')).existsSync() || File(p.join(project.localPath, '.env.example')).existsSync()) {
       ensureEnvAndKey(project.localPath, port: project.port, onLine: onLine);
@@ -379,8 +382,11 @@ class DependencyInstaller {
     // Sync environment variables with plan so steps (like migrate) have correct DB credentials
     plan.requiredEnvVars.addAll(project.envVariables);
 
-    for (final step in plan.steps) {
+    final totalSteps = plan.steps.length;
+    for (int i = 0; i < totalSteps; i++) {
+      final step = plan.steps[i];
       if (step.requiresUserApproval) {
+        onStageUpdate?.call('Waiting for approval: ${step.title}');
         final approved = await requestApproval(step);
         if (!approved) {
           onLine('User skipped or declined step: ${step.title}', false);
@@ -388,6 +394,7 @@ class DependencyInstaller {
         }
       }
 
+      onStageUpdate?.call('Step ${i + 1}/$totalSteps: ${step.title}...');
       final success = await executeStep(
         step,
         env: plan.requiredEnvVars,

@@ -216,6 +216,10 @@ class ProjectsProvider extends ChangeNotifier {
         project: project,
         onLine: logHandler,
         requestApproval: requestApproval,
+        onStageUpdate: (label) {
+          _installStageLabel = label;
+          notifyListeners();
+        },
       );
 
       if (success) {
