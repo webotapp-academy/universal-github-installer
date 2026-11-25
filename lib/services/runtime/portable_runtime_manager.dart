@@ -85,6 +85,16 @@ class PortableRuntimeManager {
     void Function(String output, bool isError)? onProgress,
   }) async {
     if (await _isRuntimeAvailable(type)) {
+      if ((type == RuntimeType.node || type == RuntimeType.npm)) {
+        final managedNodeDir = p.join(getRuntimesRootDir(), 'node');
+        final marker = File(p.join(managedNodeDir, '.use_system_ca'));
+        if (Directory(managedNodeDir).existsSync() && !marker.existsSync()) {
+          try {
+            final caCheck = await CommandRunner.run('node', ['--use-system-ca', '--version']);
+            if (caCheck.isSuccess) await marker.writeAsString('1');
+          } catch (_) {}
+        }
+      }
       return true;
     }
 
@@ -182,10 +192,13 @@ class PortableRuntimeManager {
     }
 
     onProgress?.call('⬇️ Downloading $assetName into app environment...', false);
-    final bytes = await downloadBytes(downloadUrl, onProgress: onProgress);
-    onProgress?.call('📦 Extracting $assetName...', false);
     final targetDir = p.join(getRuntimesRootDir(), 'git');
-    await _extractZip(bytes, targetDir);
+    await _downloadAndExtract(
+      downloadUrl,
+      targetDir,
+      isZip: true,
+      onProgress: onProgress,
+    );
     onProgress?.call('✓ Portable Git installed in app environment.', false);
     return await _isRuntimeAvailable(RuntimeType.git);
   }
@@ -212,16 +225,27 @@ class PortableRuntimeManager {
     final fileName = match.group(0)!;
     final url = 'https://nodejs.org/dist/latest-v22.x/$fileName';
     onProgress?.call('⬇️ Downloading $fileName into app environment...', false);
-    final bytes = await downloadBytes(url, onProgress: onProgress);
-    onProgress?.call('📦 Extracting $fileName...', false);
     final targetDir = p.join(getRuntimesRootDir(), 'node');
 
-    if (Platform.isWindows) {
-      await _extractZip(bytes, targetDir, stripTopLevelDir: true);
-    } else {
-      await _extractTarGz(bytes, targetDir, stripTopLevelDir: true);
+    await _downloadAndExtract(
+      url,
+      targetDir,
+      isZip: Platform.isWindows,
+      stripTopLevelDir: true,
+      onProgress: onProgress,
+    );
+
+    if (!Platform.isWindows) {
       await _makeBinariesExecutable(p.join(targetDir, 'bin'));
     }
+
+    // Enable system CA store for Node v22.15+ so npm works behind corporate/antivirus CAs
+    try {
+      final caCheck = await CommandRunner.run('node', ['--use-system-ca', '--version']);
+      if (caCheck.isSuccess) {
+        await File(p.join(targetDir, '.use_system_ca')).writeAsString('1');
+      }
+    } catch (_) {}
 
     onProgress?.call('✓ Portable Node.js & npm installed in app environment.', false);
     return await _isRuntimeAvailable(RuntimeType.node);
@@ -237,13 +261,16 @@ class PortableRuntimeManager {
     final url = 'https://github.com/astral-sh/uv/releases/latest/download/$asset';
 
     onProgress?.call('⬇️ Downloading $asset into app environment...', false);
-    final bytes = await downloadBytes(url);
     final targetDir = p.join(getRuntimesRootDir(), 'uv');
 
-    if (Platform.isWindows) {
-      await _extractZip(bytes, targetDir);
-    } else {
-      await _extractTarGz(bytes, targetDir, stripTopLevelDir: true);
+    await _downloadAndExtract(
+      url,
+      targetDir,
+      isZip: Platform.isWindows,
+      stripTopLevelDir: !Platform.isWindows,
+      onProgress: onProgress,
+    );
+    if (!Platform.isWindows) {
       await _makeBinariesExecutable(targetDir);
     }
 
@@ -287,9 +314,12 @@ class PortableRuntimeManager {
 
       final url = 'https://windows.php.net/downloads/releases/$zipName';
       onProgress?.call('⬇️ Downloading $zipName into app environment...', false);
-      final bytes = await downloadBytes(url, onProgress: onProgress);
-      onProgress?.call('📦 Extracting $zipName...', false);
-      await _extractZip(bytes, targetDir);
+      await _downloadAndExtract(
+        url,
+        targetDir,
+        isZip: true,
+        onProgress: onProgress,
+      );
       await _configureWindowsPhpIni(targetDir, onProgress: onProgress);
 
       // Verify PHP actually launches (checks missing Visual C++ Redistributable DLLs)
@@ -314,8 +344,12 @@ class PortableRuntimeManager {
       final url =
           'https://dl.static-php.dev/static-php-cli/common/php-8.3.14-cli-macos-$spcArch.tar.gz';
       onProgress?.call('⬇️ Downloading static PHP 8.3 for macOS ($spcArch)...', false);
-      final bytes = await downloadBytes(url);
-      await _extractTarGz(bytes, targetDir);
+      await _downloadAndExtract(
+        url,
+        targetDir,
+        isZip: false,
+        onProgress: onProgress,
+      );
       await _makeBinariesExecutable(targetDir);
     }
 
@@ -432,10 +466,12 @@ class PortableRuntimeManager {
       final arch = await _getMacArch();
       final asset = arch == 'arm64' ? 'cloudflared-darwin-arm64.tgz' : 'cloudflared-darwin-amd64.tgz';
       onProgress?.call('⬇️ Downloading $asset into app environment...', false);
-      final bytes = await downloadBytes(
+      await _downloadAndExtract(
         'https://github.com/cloudflare/cloudflared/releases/latest/download/$asset',
+        targetDir.path,
+        isZip: false,
+        onProgress: onProgress,
       );
-      await _extractTarGz(bytes, targetDir.path);
       await _makeBinariesExecutable(targetDir.path);
     }
 
@@ -448,8 +484,51 @@ class PortableRuntimeManager {
     return utf8.decode(bytes);
   }
 
+  static Future<void> _downloadAndExtract(
+    String url,
+    String targetDir, {
+    required bool isZip,
+    bool stripTopLevelDir = false,
+    void Function(String output, bool isError)? onProgress,
+  }) async {
+    final tempDir = await Directory.systemTemp.createTemp('webotapp_pkg_');
+    final archiveFile = File(p.join(tempDir.path, isZip ? 'pkg.zip' : 'pkg.tar.gz'));
+    try {
+      await downloadToFile(url, archiveFile.path, onProgress: onProgress);
+      onProgress?.call('📦 Extracting package into app environment...', false);
+      await _extractArchiveFile(
+        archiveFile.path,
+        targetDir,
+        isZip: isZip,
+        stripTopLevelDir: stripTopLevelDir,
+      );
+    } finally {
+      try {
+        await tempDir.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
   static Future<Uint8List> downloadBytes(
     String url, {
+    Map<String, String>? headers,
+    void Function(String output, bool isError)? onProgress,
+  }) async {
+    final tempDir = await Directory.systemTemp.createTemp('webotapp_bytes_');
+    final outFile = File(p.join(tempDir.path, 'payload.bin'));
+    try {
+      await downloadToFile(url, outFile.path, headers: headers, onProgress: onProgress);
+      return await outFile.readAsBytes();
+    } finally {
+      try {
+        await tempDir.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
+  static Future<void> downloadToFile(
+    String url,
+    String destPath, {
     Map<String, String>? headers,
     void Function(String output, bool isError)? onProgress,
   }) async {
@@ -457,7 +536,11 @@ class PortableRuntimeManager {
       'User-Agent': _userAgent,
       ...?headers,
     };
+    final outFile = File(destPath);
+    await outFile.parent.create(recursive: true);
+
     final client = http.Client();
+    IOSink? sink;
     try {
       final request = http.Request('GET', Uri.parse(url))..headers.addAll(mergedHeaders);
       final streamed = await client.send(request).timeout(const Duration(seconds: 30));
@@ -465,13 +548,13 @@ class PortableRuntimeManager {
         throw Exception('Download failed ($url): HTTP ${streamed.statusCode}');
       }
 
+      sink = outFile.openWrite();
       final total = streamed.contentLength ?? 0;
-      final builder = BytesBuilder(copy: false);
       int downloaded = 0;
       int nextPercentLog = 25;
 
       await for (final chunk in streamed.stream.timeout(const Duration(seconds: 45))) {
-        builder.add(chunk);
+        sink.add(chunk);
         downloaded += chunk.length;
         if (onProgress != null && total > 0) {
           final pct = ((downloaded * 100) ~/ total);
@@ -485,74 +568,136 @@ class PortableRuntimeManager {
           }
         }
       }
-      return builder.takeBytes();
+      await sink.flush();
+      await sink.close();
+      sink = null;
     } on HandshakeException {
-      return await _downloadBytesViaSystemCurl(url, headers: headers);
+      await sink?.close();
+      await _downloadFileViaSystemCurl(url, destPath, headers: headers, onProgress: onProgress);
     } on TlsException {
-      return await _downloadBytesViaSystemCurl(url, headers: headers);
+      await sink?.close();
+      await _downloadFileViaSystemCurl(url, destPath, headers: headers, onProgress: onProgress);
     } finally {
+      try {
+        await sink?.close();
+      } catch (_) {}
       client.close();
     }
   }
 
   /// Falls back to the OS native `curl` (Schannel on Windows, SecureTransport on macOS)
   /// when Dart's bundled BoringSSL cannot verify a corporate/antivirus root CA.
-  static Future<Uint8List> _downloadBytesViaSystemCurl(
-    String url, {
+  static Future<void> _downloadFileViaSystemCurl(
+    String url,
+    String destPath, {
     Map<String, String>? headers,
+    void Function(String output, bool isError)? onProgress,
   }) async {
-    final tempDir = await Directory.systemTemp.createTemp('webotapp_dl_');
-    final outFile = File(p.join(tempDir.path, 'payload.bin'));
+    final outFile = File(destPath);
+    final curlExe = Platform.isWindows ? 'curl.exe' : '/usr/bin/curl';
+    final args = <String>[
+      '-fsSL',
+      '--connect-timeout',
+      '15',
+      '--max-time',
+      '240',
+      if (Platform.isWindows) '--ssl-no-revoke',
+      '-A',
+      _userAgent,
+      if (headers != null)
+        for (final entry in headers.entries) ...['-H', '${entry.key}: ${entry.value}'],
+      '-o',
+      destPath,
+      url,
+    ];
+
+    final process = await Process.start(curlExe, args, runInShell: false);
+    final stderrBuf = StringBuffer();
+    process.stderr.transform(const Utf8Decoder(allowMalformed: true)).listen(stderrBuf.write);
+
+    int lastLoggedMb = -1;
+    Timer? progressTimer;
+    if (onProgress != null) {
+      progressTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+        try {
+          if (outFile.existsSync()) {
+            final bytes = outFile.lengthSync();
+            final mb = bytes ~/ (1024 * 1024);
+            if (mb > lastLoggedMb && bytes > 0) {
+              lastLoggedMb = mb;
+              final mbStr = (bytes / (1024 * 1024)).toStringAsFixed(1);
+              onProgress('   ↳ Downloaded $mbStr MB...', false);
+            }
+          }
+        } catch (_) {}
+      });
+    }
+
     try {
-      final curlExe = Platform.isWindows ? 'curl.exe' : '/usr/bin/curl';
-      final args = <String>[
-        '-fsSL',
-        '--connect-timeout',
-        '15',
-        '--max-time',
-        '240',
-        if (Platform.isWindows) '--ssl-no-revoke',
-        '-A',
-        _userAgent,
-        if (headers != null)
-          for (final entry in headers.entries) ...['-H', '${entry.key}: ${entry.value}'],
-        '-o',
-        outFile.path,
-        url,
-      ];
-      final res = await Process.run(curlExe, args).timeout(const Duration(seconds: 250));
-      if (res.exitCode != 0 || !outFile.existsSync()) {
+      final exitCode = await process.exitCode.timeout(
+        const Duration(seconds: 250),
+        onTimeout: () {
+          process.kill(ProcessSignal.sigkill);
+          return -2;
+        },
+      );
+      if (exitCode != 0 || !outFile.existsSync()) {
         throw Exception(
-          'System curl failed for $url (exit ${res.exitCode}): ${res.stderr}',
+          'System curl failed for $url (exit $exitCode): $stderrBuf',
         );
       }
-      return await outFile.readAsBytes();
     } finally {
-      try {
-        await tempDir.delete(recursive: true);
-      } catch (_) {}
+      progressTimer?.cancel();
     }
   }
 
-  static Future<void> _extractZip(
-    Uint8List bytes,
+  static Future<void> _extractArchiveFile(
+    String archivePath,
     String targetDir, {
+    required bool isZip,
     bool stripTopLevelDir = false,
   }) async {
-    await Isolate.run(() {
-      final archive = ZipDecoder().decodeBytes(bytes);
-      _writeArchiveSync(archive, targetDir, stripTopLevelDir: stripTopLevelDir);
-    });
-  }
+    final dir = Directory(targetDir);
+    if (dir.existsSync()) {
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {}
+    }
+    await dir.create(recursive: true);
 
-  static Future<void> _extractTarGz(
-    Uint8List bytes,
-    String targetDir, {
-    bool stripTopLevelDir = false,
-  }) async {
+    // Prefer fast native OS archive tools (Windows bsdtar / macOS tar+unzip)
+    if (Platform.isWindows) {
+      final args = <String>[
+        '-xf',
+        archivePath,
+        '-C',
+        targetDir,
+        if (stripTopLevelDir) '--strip-components=1',
+      ];
+      final res = await Process.run('tar.exe', args).timeout(const Duration(minutes: 2));
+      if (res.exitCode == 0) {
+        return;
+      }
+    } else if (!isZip) {
+      final args = <String>[
+        '-xzf',
+        archivePath,
+        '-C',
+        targetDir,
+        if (stripTopLevelDir) '--strip-components=1',
+      ];
+      final res = await Process.run('/usr/bin/tar', args).timeout(const Duration(minutes: 2));
+      if (res.exitCode == 0) {
+        return;
+      }
+    }
+
+    // Fallback: extract in background isolate via Dart archive package
     await Isolate.run(() {
-      final tarBytes = GZipDecoder().decodeBytes(bytes);
-      final archive = TarDecoder().decodeBytes(tarBytes);
+      final bytes = File(archivePath).readAsBytesSync();
+      final Archive archive = isZip
+          ? ZipDecoder().decodeBytes(bytes)
+          : TarDecoder().decodeBytes(GZipDecoder().decodeBytes(bytes));
       _writeArchiveSync(archive, targetDir, stripTopLevelDir: stripTopLevelDir);
     });
   }

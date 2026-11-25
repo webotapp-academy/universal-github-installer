@@ -125,7 +125,7 @@ class DependencyInstaller {
               title: 'Install Frontend Dependencies',
               description: 'Install npm packages for frontend assets',
               command: 'npm',
-              args: ['install'],
+              args: ['install', '--no-audit', '--no-fund'],
               workingDirectory: path,
             ));
             bool hasBuildScript = false;
@@ -194,7 +194,7 @@ class DependencyInstaller {
           title: 'Install Node Dependencies',
           description: 'Run $pkgMgr install',
           command: pkgMgr,
-          args: ['install'],
+          args: pkgMgr == 'npm' ? ['install', '--no-audit', '--no-fund'] : ['install'],
           workingDirectory: path,
         ));
 

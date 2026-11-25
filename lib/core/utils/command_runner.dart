@@ -168,9 +168,23 @@ class CommandRunner {
       'COMPOSER_NO_INTERACTION': '1',
       'PIP_NO_INPUT': '1',
       'npm_config_yes': 'true',
+      'npm_config_audit': 'false',
+      'npm_config_fund': 'false',
       ...?extra,
       'PATH': finalPath, // Guaranteed to have our enhanced searchDirs at the very front
     };
+
+    // Enable system CA store when running our managed Node runtime (v22.15+)
+    final managedNodeDir = p.join(PortableRuntimeManager.getRuntimesRootDir(), 'node');
+    if (nodeBin.startsWith(managedNodeDir) &&
+        File(p.join(managedNodeDir, '.use_system_ca')).existsSync()) {
+      final currentNodeOpts = merged['NODE_OPTIONS'] ?? '';
+      if (!currentNodeOpts.contains('--use-system-ca')) {
+        merged['NODE_OPTIONS'] = currentNodeOpts.isEmpty
+            ? '--use-system-ca'
+            : '$currentNodeOpts --use-system-ca';
+      }
+    }
 
     return merged;
   }
@@ -275,8 +289,8 @@ class CommandRunner {
       process.stdout.transform(const Utf8Decoder(allowMalformed: true)).listen((data) {
         stdoutBuffer.write(data);
         if (onLine != null) {
-          for (final line in data.split('\n')) {
-            if (line.isNotEmpty) onLine(line, false);
+          for (final line in data.split(RegExp(r'\r\n|\n|\r'))) {
+            if (line.trim().isNotEmpty) onLine(line, false);
           }
         }
       }, onDone: () {
@@ -286,8 +300,8 @@ class CommandRunner {
       process.stderr.transform(const Utf8Decoder(allowMalformed: true)).listen((data) {
         stderrBuffer.write(data);
         if (onLine != null) {
-          for (final line in data.split('\n')) {
-            if (line.isNotEmpty) onLine(line, true);
+          for (final line in data.split(RegExp(r'\r\n|\n|\r'))) {
+            if (line.trim().isNotEmpty) onLine(line, true);
           }
         }
       }, onDone: () {
