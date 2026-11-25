@@ -395,8 +395,35 @@ class DependencyInstaller {
       }
 
       onStageUpdate?.call('Step ${i + 1}/$totalSteps: ${step.title}...');
+      InstallationStep activeStep = step;
+      if (step.id == 'py_venv') {
+        final pyCheck = await CommandRunner.run(
+          step.command,
+          ['--version'],
+          timeout: const Duration(seconds: 10),
+        );
+        if (!pyCheck.isSuccess &&
+            PortableRuntimeManager.supportsPortableInstall(RuntimeType.uv)) {
+          onLine('⚙️ System Python not found. Bootstrapping portable uv (Python manager)...', false);
+          final uvOk = await PortableRuntimeManager.ensureRuntime(
+            RuntimeType.uv,
+            onProgress: onLine,
+          );
+          if (uvOk) {
+            activeStep = InstallationStep(
+              id: step.id,
+              title: step.title,
+              description: 'uv venv .venv --python 3.12 --seed',
+              command: 'uv',
+              args: ['venv', '.venv', '--python', '3.12', '--seed'],
+              workingDirectory: step.workingDirectory,
+            );
+          }
+        }
+      }
+
       var success = await executeStep(
-        step,
+        activeStep,
         env: plan.requiredEnvVars,
         onLine: onLine,
       );
@@ -411,11 +438,33 @@ class DependencyInstaller {
         final upgraded = await PortableRuntimeManager.upgradePortablePhp(onProgress: onLine);
         if (upgraded) {
           success = await executeStep(
-            step,
+            activeStep,
             env: plan.requiredEnvVars,
             onLine: onLine,
           );
         }
+      }
+
+      // Fallback if Windows path-length or Defender lock breaks dev autoloader (e.g. phpunit)
+      if (!success &&
+          step.id == 'composer_install' &&
+          step.errorMessage != null &&
+          (step.errorMessage!.contains('ClassMapGenerator') ||
+              step.errorMessage!.contains('realpath'))) {
+        onLine('⚠️ Composer dev autoloader hit a path/lock issue. Retrying production install (--no-dev)...', false);
+        final noDevStep = InstallationStep(
+          id: step.id,
+          title: step.title,
+          description: 'composer install --no-interaction --prefer-dist --no-dev',
+          command: 'composer',
+          args: ['install', '--no-interaction', '--prefer-dist', '--no-dev'],
+          workingDirectory: step.workingDirectory,
+        );
+        success = await executeStep(
+          noDevStep,
+          env: plan.requiredEnvVars,
+          onLine: onLine,
+        );
       }
 
       if (!success && !step.isDestructive) {

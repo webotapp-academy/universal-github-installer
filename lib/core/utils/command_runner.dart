@@ -113,6 +113,9 @@ class CommandRunner {
     final searchDirs = getSearchDirectories(workingDirectory);
 
     for (final dir in searchDirs) {
+      if (Platform.isWindows && dir.toLowerCase().contains(r'\microsoft\windowsapps')) {
+        continue;
+      }
       final candidate = p.join(dir, executable);
       if (File(candidate).existsSync()) {
         return candidate;

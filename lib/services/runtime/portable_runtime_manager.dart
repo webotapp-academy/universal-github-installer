@@ -84,6 +84,10 @@ class PortableRuntimeManager {
     RuntimeType type, {
     void Function(String output, bool isError)? onProgress,
   }) async {
+    if (type == RuntimeType.php && Platform.isWindows) {
+      copyBundledCrtDlls(p.join(getRuntimesRootDir(), 'php'));
+    }
+
     if (await _isRuntimeAvailable(type)) {
       if ((type == RuntimeType.node || type == RuntimeType.npm)) {
         final managedNodeDir = p.join(getRuntimesRootDir(), 'node');
@@ -212,6 +216,7 @@ class PortableRuntimeManager {
       isZip: true,
       onProgress: onProgress,
     );
+    copyBundledCrtDlls(targetDir);
     onProgress?.call('✓ Portable Git installed in app environment.', false);
     return await _isRuntimeAvailable(RuntimeType.git);
   }
@@ -250,6 +255,8 @@ class PortableRuntimeManager {
 
     if (!Platform.isWindows) {
       await _makeBinariesExecutable(p.join(targetDir, 'bin'));
+    } else {
+      copyBundledCrtDlls(targetDir);
     }
 
     // Enable system CA store for Node v22.15+ so npm works behind corporate/antivirus CAs
@@ -285,6 +292,8 @@ class PortableRuntimeManager {
     );
     if (!Platform.isWindows) {
       await _makeBinariesExecutable(targetDir);
+    } else {
+      copyBundledCrtDlls(targetDir);
     }
 
     onProgress?.call('✓ Portable uv (Python manager) installed in app environment.', false);
@@ -333,14 +342,29 @@ class PortableRuntimeManager {
         isZip: true,
         onProgress: onProgress,
       );
+      copyBundledCrtDlls(targetDir);
       await _configureWindowsPhpIni(targetDir, onProgress: onProgress);
 
-      // Verify PHP actually launches (checks missing Visual C++ Redistributable DLLs)
-      final check = await CommandRunner.run('php', ['--version']);
+      // Verify PHP actually launches (checks missing/older Visual C++ Redistributable DLLs)
+      final check = await CommandRunner.run('php', ['--version'], timeout: const Duration(seconds: 15));
       if (!check.isSuccess) {
-        if (check.exitCode == -1073741515 || check.exitCode == 3221225781) {
+        final combined = '${check.stdout}\n${check.stderr}';
+        final isCrtMismatch = check.exitCode == -1073741515 ||
+            check.exitCode == 3221225781 ||
+            combined.contains('VCRUNTIME140') ||
+            combined.contains('not compatible with this PHP build');
+        if (isCrtMismatch) {
           onProgress?.call(
-            '✗ Portable PHP failed to start (missing VCRUNTIME140.dll). Please install Microsoft Visual C++ Redistributable (x64): https://aka.ms/vs/17/release/vc_redist.x64.exe',
+            '⚠️ PHP 8.4 requires VC++ Runtime 14.44+. Checking PHP 8.3 (vs16) compatibility fallback...',
+            false,
+          );
+          final fallbackOk = await _installWindowsPhp83Fallback(releases, targetDir, onProgress: onProgress);
+          if (fallbackOk) {
+            onProgress?.call('✓ Portable PHP 8.3 installed in app environment.', false);
+            return await _isRuntimeAvailable(RuntimeType.php);
+          }
+          onProgress?.call(
+            '✗ Portable PHP failed to start due to outdated/missing VCRUNTIME140.dll. Install VC++ Redistributable (x64): https://aka.ms/vs/17/release/vc_redist.x64.exe',
             true,
           );
         } else {
@@ -368,6 +392,68 @@ class PortableRuntimeManager {
 
     onProgress?.call('✓ Portable PHP installed in app environment.', false);
     return await _isRuntimeAvailable(RuntimeType.php);
+  }
+
+  /// Copies bundled Visual C++ CRT DLLs from the app's executable folder into [targetDir]
+  /// so Windows App-Local DLL redirection loads the compatible 14.44+ runtime ahead of System32.
+  static void copyBundledCrtDlls(String targetDir) {
+    if (!Platform.isWindows) return;
+    final outDir = Directory(targetDir);
+    if (!outDir.existsSync()) return;
+
+    final exeDir = Directory(p.dirname(Platform.resolvedExecutable));
+    if (!exeDir.existsSync()) return;
+
+    const crtDlls = [
+      'vcruntime140.dll',
+      'vcruntime140_1.dll',
+      'vcruntime140_threads.dll',
+      'msvcp140.dll',
+      'msvcp140_1.dll',
+      'msvcp140_2.dll',
+      'concrt140.dll',
+      'vccorlib140.dll',
+    ];
+    for (final dll in crtDlls) {
+      final src = File(p.join(exeDir.path, dll));
+      if (src.existsSync()) {
+        final dst = File(p.join(targetDir, dll));
+        if (!dst.existsSync()) {
+          try {
+            src.copySync(dst.path);
+          } catch (_) {}
+        }
+      }
+    }
+  }
+
+  static Future<bool> _installWindowsPhp83Fallback(
+    Map<String, dynamic> releases,
+    String targetDir, {
+    void Function(String output, bool isError)? onProgress,
+  }) async {
+    final entry = releases['8.3'] as Map<String, dynamic>?;
+    if (entry == null) return false;
+    String? zipName;
+    for (final key in entry.keys) {
+      if (key.startsWith('nts-') && key.endsWith('-x64')) {
+        final build = entry[key] as Map<String, dynamic>?;
+        final zipMap = build?['zip'] as Map<String, dynamic>?;
+        if (zipMap != null && zipMap['path'] is String) {
+          zipName = zipMap['path'] as String;
+          break;
+        }
+      }
+    }
+    if (zipName == null) return false;
+
+    final url = 'https://windows.php.net/downloads/releases/$zipName';
+    onProgress?.call('⬇️ Downloading $zipName (compatible fallback)...', false);
+    await _downloadAndExtract(url, targetDir, isZip: true, onProgress: onProgress);
+    copyBundledCrtDlls(targetDir);
+    await _configureWindowsPhpIni(targetDir, onProgress: onProgress);
+    final check = await CommandRunner.run('php', ['--version'], timeout: const Duration(seconds: 15));
+    return check.isSuccess;
   }
 
   static Future<void> _configureWindowsPhpIni(
@@ -509,7 +595,7 @@ class PortableRuntimeManager {
     try {
       await downloadToFile(url, archiveFile.path, onProgress: onProgress);
       onProgress?.call('📦 Extracting package into app environment...', false);
-      await _extractArchiveFile(
+      await extractArchiveFile(
         archiveFile.path,
         targetDir,
         isZip: isZip,
@@ -664,7 +750,7 @@ class PortableRuntimeManager {
     }
   }
 
-  static Future<void> _extractArchiveFile(
+  static Future<void> extractArchiveFile(
     String archivePath,
     String targetDir, {
     required bool isZip,

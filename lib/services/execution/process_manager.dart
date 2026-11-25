@@ -10,6 +10,8 @@ import '../../core/utils/command_runner.dart';
 import '../../core/utils/port_detector.dart';
 import '../database/database_manager.dart';
 import '../runtime/dependency_installer.dart';
+import '../runtime/portable_runtime_manager.dart';
+import '../../core/models/runtime_info.dart';
 
 class ProcessManager {
   static final ProcessManager _instance = ProcessManager._internal();
@@ -137,7 +139,13 @@ class ProcessManager {
       if (force || !venvDir.existsSync()) {
         logHandler('📦 Python virtual environment not found. Creating .venv...', false);
         final pyCmd = Platform.isWindows ? 'python' : 'python3';
-        final venvRes = await CommandRunner.run(pyCmd, ['-m', 'venv', '.venv'], workingDirectory: localPath, onLine: logHandler);
+        var venvRes = await CommandRunner.run(pyCmd, ['-m', 'venv', '.venv'], workingDirectory: localPath, onLine: logHandler);
+        if (!venvRes.isSuccess && PortableRuntimeManager.supportsPortableInstall(RuntimeType.uv)) {
+          final uvOk = await PortableRuntimeManager.ensureRuntime(RuntimeType.uv, onProgress: logHandler);
+          if (uvOk) {
+            venvRes = await CommandRunner.run('uv', ['venv', '.venv', '--python', '3.12', '--seed'], workingDirectory: localPath, onLine: logHandler);
+          }
+        }
         if (!venvRes.isSuccess) {
           logHandler('✗ Failed to create Python .venv (exit ${venvRes.exitCode}).', true);
           return false;
