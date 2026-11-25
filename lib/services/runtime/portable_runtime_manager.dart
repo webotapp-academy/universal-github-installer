@@ -127,11 +127,24 @@ class PortableRuntimeManager {
     if (cmd.isEmpty) return false;
 
     try {
-      final res = await CommandRunner.run(cmd, ['--version']);
+      final res = await CommandRunner.run(
+        cmd,
+        ['--version'],
+        timeout: const Duration(seconds: 15),
+      );
       return res.isSuccess;
     } catch (_) {
       return false;
     }
+  }
+
+  /// Upgrades the app-managed PHP runtime to the latest 8.4+ build when an older
+  /// cached PHP version (e.g. 8.3) does not satisfy a project's composer.lock.
+  static Future<bool> upgradePortablePhp({
+    void Function(String output, bool isError)? onProgress,
+  }) async {
+    onProgress?.call('⬆️ Upgrading app-managed PHP to 8.4+...', false);
+    return await _installPhp(onProgress: onProgress);
   }
 
   static Future<bool> _installPortable(
@@ -291,7 +304,7 @@ class PortableRuntimeManager {
 
       final releases = jsonDecode(body) as Map<String, dynamic>;
       String? zipName;
-      for (final versionKey in ['8.3', '8.4', '8.2']) {
+      for (final versionKey in ['8.4', '8.5', '8.3', '8.2']) {
         final entry = releases[versionKey] as Map<String, dynamic>?;
         if (entry == null) continue;
         for (final key in entry.keys) {
@@ -342,8 +355,8 @@ class PortableRuntimeManager {
       final arch = await _getMacArch();
       final spcArch = arch == 'arm64' ? 'aarch64' : 'x86_64';
       final url =
-          'https://dl.static-php.dev/static-php-cli/common/php-8.3.14-cli-macos-$spcArch.tar.gz';
-      onProgress?.call('⬇️ Downloading static PHP 8.3 for macOS ($spcArch)...', false);
+          'https://dl.static-php.dev/static-php-cli/common/php-8.4.23-cli-macos-$spcArch.tar.gz';
+      onProgress?.call('⬇️ Downloading static PHP 8.4 for macOS ($spcArch)...', false);
       await _downloadAndExtract(
         url,
         targetDir,

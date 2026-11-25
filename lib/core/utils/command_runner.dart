@@ -67,6 +67,10 @@ class CommandRunner {
       final userProfile = Platform.environment['USERPROFILE'] ?? home;
 
       searchDirs.addAll([
+        p.join(programFiles, 'nodejs'),
+        p.join(programFilesX86, 'nodejs'),
+        p.join(localAppData, 'Programs', 'nodejs'),
+        p.join(userProfile, 'AppData', 'Roaming', 'npm'),
         p.join(programFiles, 'Git', 'cmd'),
         p.join(programFiles, 'Git', 'bin'),
         p.join(programFilesX86, 'Git', 'cmd'),

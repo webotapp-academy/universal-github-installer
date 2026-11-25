@@ -395,11 +395,28 @@ class DependencyInstaller {
       }
 
       onStageUpdate?.call('Step ${i + 1}/$totalSteps: ${step.title}...');
-      final success = await executeStep(
+      var success = await executeStep(
         step,
         env: plan.requiredEnvVars,
         onLine: onLine,
       );
+
+      // Auto-upgrade managed PHP to 8.4+ if composer.lock requires newer PHP
+      if (!success &&
+          step.id == 'composer_install' &&
+          step.errorMessage != null &&
+          RegExp(r'requires php >=?\s*8\.[45]', caseSensitive: false)
+              .hasMatch(step.errorMessage!)) {
+        onLine('⚙️ Project requires PHP >= 8.4. Upgrading portable PHP and retrying...', false);
+        final upgraded = await PortableRuntimeManager.upgradePortablePhp(onProgress: onLine);
+        if (upgraded) {
+          success = await executeStep(
+            step,
+            env: plan.requiredEnvVars,
+            onLine: onLine,
+          );
+        }
+      }
 
       if (!success && !step.isDestructive) {
         // Stop on critical failure
@@ -435,6 +452,7 @@ class DependencyInstaller {
 
     for (final runtime in needed) {
       if (PortableRuntimeManager.supportsPortableInstall(runtime)) {
+        onLine?.call('🔍 Checking ${runtime.displayName}...', false);
         final ok = await PortableRuntimeManager.ensureRuntime(runtime, onProgress: onLine);
         if (!ok) {
           onLine?.call(
