@@ -1,8 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import '../../core/models/project.dart';
+import '../../core/models/runtime_info.dart';
 import '../../core/models/tunnel_info.dart';
+import '../../core/utils/command_runner.dart';
+import '../runtime/portable_runtime_manager.dart';
 import 'tailscale_service.dart';
 
 class TunnelManager {
@@ -73,15 +75,7 @@ class TunnelManager {
     // Cloudflare fallback
     onStatusChange?.call('Initiating Cloudflare tunnel for port ${project.port}...');
     try {
-      final process = await Process.start(
-        'cloudflared',
-        ['tunnel', '--url', 'http://127.0.0.1:${project.port}'],
-        runInShell: true,
-      );
-
-      tunnel.processPid = process.pid;
-      _tunnelProcesses[projectId] = process;
-
+      await PortableRuntimeManager.ensureRuntime(RuntimeType.cloudflared);
       final urlCompleter = Completer<String?>();
 
       void processOutput(String text) {
@@ -92,8 +86,14 @@ class TunnelManager {
         }
       }
 
-      process.stdout.transform(utf8.decoder).listen((data) => processOutput(data));
-      process.stderr.transform(utf8.decoder).listen((data) => processOutput(data));
+      final process = await CommandRunner.startStreaming(
+        'cloudflared',
+        ['tunnel', '--url', 'http://127.0.0.1:${project.port}'],
+        onLine: (line, _) => processOutput(line),
+      );
+
+      tunnel.processPid = process.pid;
+      _tunnelProcesses[projectId] = process;
 
       final publicUrl = await urlCompleter.future.timeout(
         const Duration(seconds: 10),

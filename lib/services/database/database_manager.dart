@@ -43,8 +43,8 @@ class DatabaseManager {
         final home = Platform.environment['HOME'] ?? '';
         final plistPath = p.join(home, 'Library', 'LaunchAgents', 'com.webotapp.mysql.plist');
         if (File(plistPath).existsSync()) {
-          final r = await Process.run('launchctl', ['load', plistPath]);
-          if (r.exitCode == 0) triggeredStart = true;
+          final r = await CommandRunner.run('launchctl', ['load', plistPath], timeout: const Duration(seconds: 10));
+          if (r.isSuccess) triggeredStart = true;
         }
 
         final xamppMysqld = File('/Applications/XAMPP/xamppfiles/sbin/mysqld');
@@ -68,38 +68,49 @@ innodb_log_group_home_dir=$datadir
 lc_messages_dir=/Applications/XAMPP/xamppfiles/share/mysql
 ''');
             final user = Platform.environment['USER'] ?? 'root';
-            await Process.run('/Applications/XAMPP/xamppfiles/bin/mysql_install_db', [
+            await CommandRunner.run('/Applications/XAMPP/xamppfiles/bin/mysql_install_db', [
               '--defaults-file=${cnfFile.path}',
               '--user=$user',
-            ]);
+            ], timeout: const Duration(seconds: 30));
           }
 
-          await Process.start(
-            xamppMysqld.path,
-            ['--defaults-file=${cnfFile.path}'],
-            mode: ProcessStartMode.detached,
-          );
+          try {
+            await Process.start(
+              xamppMysqld.path,
+              ['--defaults-file=${cnfFile.path}'],
+              mode: ProcessStartMode.detached,
+            );
+          } catch (_) {}
         }
 
-        final brewRes = await Process.run('brew', ['services', 'start', 'mysql']);
-        if (brewRes.exitCode == 0) triggeredStart = true;
+        final brewBin = CommandRunner.resolveExecutable('brew');
+        if (brewBin != 'brew' && File(brewBin).existsSync()) {
+          final brewRes = await CommandRunner.run(
+            brewBin,
+            ['services', 'start', 'mysql'],
+            timeout: const Duration(seconds: 20),
+          );
+          if (brewRes.isSuccess) triggeredStart = true;
+        }
       } else if (Platform.isWindows) {
-        final mysqlSvc = await Process.run('net', ['start', 'mysql']);
-        if (mysqlSvc.exitCode == 0) triggeredStart = true;
-        final mariaSvc = await Process.run('net', ['start', 'mariadb']);
-        if (mariaSvc.exitCode == 0) triggeredStart = true;
+        final mysqlSvc = await CommandRunner.run('net', ['start', 'mysql'], timeout: const Duration(seconds: 15));
+        if (mysqlSvc.isSuccess) triggeredStart = true;
+        final mariaSvc = await CommandRunner.run('net', ['start', 'mariadb'], timeout: const Duration(seconds: 15));
+        if (mariaSvc.isSuccess) triggeredStart = true;
         final xamppWin = File(r'C:\xampp\mysql\bin\mysqld.exe');
         if (xamppWin.existsSync()) {
           triggeredStart = true;
-          await Process.start(
-            xamppWin.path,
-            [r'--defaults-file=C:\xampp\mysql\bin\my.ini', '--standalone'],
-            mode: ProcessStartMode.detached,
-          );
+          try {
+            await Process.start(
+              xamppWin.path,
+              [r'--defaults-file=C:\xampp\mysql\bin\my.ini', '--standalone'],
+              mode: ProcessStartMode.detached,
+            );
+          } catch (_) {}
         }
       } else if (Platform.isLinux) {
-        final r = await Process.run('sudo', ['systemctl', 'start', 'mysql']);
-        if (r.exitCode == 0) triggeredStart = true;
+        final r = await CommandRunner.run('sudo', ['-n', 'systemctl', 'start', 'mysql'], timeout: const Duration(seconds: 15));
+        if (r.isSuccess) triggeredStart = true;
       }
 
       if (!triggeredStart) {
@@ -130,21 +141,24 @@ lc_messages_dir=/Applications/XAMPP/xamppfiles/share/mysql
         final home = Platform.environment['HOME'] ?? '';
         final plistPath = p.join(home, 'Library', 'LaunchAgents', 'com.webotapp.mysql.plist');
         if (File(plistPath).existsSync()) {
-          await Process.run('launchctl', ['unload', plistPath]);
+          await CommandRunner.run('launchctl', ['unload', plistPath], timeout: const Duration(seconds: 10));
         }
         final sockPath = p.join(home, '.local', 'share', 'webotapp', 'mysql.sock');
         final xamppAdmin = File('/Applications/XAMPP/xamppfiles/bin/mysqladmin');
         if (xamppAdmin.existsSync()) {
-          await Process.run(xamppAdmin.path, ['-S', sockPath, '-u', 'root', 'shutdown']);
+          await CommandRunner.run(xamppAdmin.path, ['-S', sockPath, '-u', 'root', 'shutdown'], timeout: const Duration(seconds: 10));
         }
-        await Process.run('pkill', ['-f', 'mysqld.*my.cnf']);
-        await Process.run('brew', ['services', 'stop', 'mysql']);
+        await CommandRunner.run('pkill', ['-f', 'mysqld.*my.cnf'], timeout: const Duration(seconds: 10));
+        final brewBin = CommandRunner.resolveExecutable('brew');
+        if (brewBin != 'brew' && File(brewBin).existsSync()) {
+          await CommandRunner.run(brewBin, ['services', 'stop', 'mysql'], timeout: const Duration(seconds: 15));
+        }
       } else if (Platform.isWindows) {
-        await Process.run('net', ['stop', 'mysql']);
-        await Process.run('net', ['stop', 'mariadb']);
-        await Process.run('taskkill', ['/F', '/IM', 'mysqld.exe']);
+        await CommandRunner.run('net', ['stop', 'mysql'], timeout: const Duration(seconds: 15));
+        await CommandRunner.run('net', ['stop', 'mariadb'], timeout: const Duration(seconds: 15));
+        await CommandRunner.run('taskkill', ['/F', '/IM', 'mysqld.exe'], timeout: const Duration(seconds: 10));
       } else if (Platform.isLinux) {
-        await Process.run('sudo', ['systemctl', 'stop', 'mysql']);
+        await CommandRunner.run('sudo', ['-n', 'systemctl', 'stop', 'mysql'], timeout: const Duration(seconds: 15));
       }
 
       for (int i = 0; i < 15; i++) {
