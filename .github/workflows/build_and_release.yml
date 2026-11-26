@@ -139,3 +139,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Update release-downloads branch
+        run: |
+          mkdir -p /tmp/release-downloads-staging
+          cp -f release-artifacts/* /tmp/release-downloads-staging/ || true
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin release-downloads || true
+          if git show-ref --verify --quiet refs/remotes/origin/release-downloads; then
+            git checkout -B release-downloads origin/release-downloads
+          else
+            git checkout --orphan release-downloads
+            git rm -rf . || true
+          fi
+          cp -f /tmp/release-downloads-staging/WebotApp-Universal-GitHub-Installer-macOS.dmg . 2>/dev/null || true
+          cp -f /tmp/release-downloads-staging/WebotApp-Universal-GitHub-Installer-Windows-x64.zip . 2>/dev/null || true
+          git add WebotApp-Universal-GitHub-Installer-macOS.dmg WebotApp-Universal-GitHub-Installer-Windows-x64.zip 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m "release: update desktop installers (${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'latest' }})"
+            git push origin release-downloads
+          fi
+
