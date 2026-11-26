@@ -8,6 +8,7 @@ import '../../state/app_state.dart';
 import '../../state/process_provider.dart';
 import '../../state/projects_provider.dart';
 import '../widgets/status_badge.dart';
+import '../widgets/tactile_press.dart';
 import '../widgets/terminal_view.dart';
 
 class RunningScreen extends StatefulWidget {
@@ -52,68 +53,89 @@ class _RunningScreenState extends State<RunningScreen> {
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Process Manager & Live Console',
-                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${projectsProvider.runningCount} running • ${projectsProvider.projects.length} total projects managed',
-                      style: const TextStyle(color: Colors.grey, fontSize: 13),
-                    ),
-                  ],
-                ),
-                if (currentProject != null)
-                  Row(
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (!isRunning) ...[
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.successGreen),
-                          icon: const Icon(Icons.play_arrow, size: 16),
-                          label: const Text('Start Project'),
-                          onPressed: () => projectsProvider.startProject(currentProject, processProvider),
+                      const Text(
+                        'Process Manager & Live Console',
+                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${projectsProvider.runningCount} running • ${projectsProvider.projects.length} total projects managed',
+                        style: AppTheme.tabularNumberStyle.copyWith(
+                          color: Theme.of(context).textTheme.bodyMedium?.color,
+                          fontSize: 13,
                         ),
-                        const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          icon: const Icon(Icons.download_for_offline_outlined, size: 16),
-                          label: const Text('Install Dependencies'),
-                          onPressed: () => projectsProvider.reinstallDependencies(currentProject, processProvider),
-                        ),
-                      ] else ...[
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.errorRed),
-                          icon: const Icon(Icons.stop, size: 16),
-                          label: const Text('Stop Project'),
-                          onPressed: () => projectsProvider.stopProject(currentProject, processProvider),
-                        ),
-                        const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          icon: const Icon(Icons.refresh, size: 16),
-                          label: const Text('Restart'),
-                          onPressed: () => projectsProvider.restartProject(currentProject, processProvider),
-                        ),
-                        const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          icon: const Icon(Icons.download_for_offline_outlined, size: 16),
-                          label: const Text('Reinstall Deps'),
-                          onPressed: () => projectsProvider.reinstallDependencies(currentProject, processProvider),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          icon: const Icon(Icons.open_in_browser, size: 16),
-                          label: Text('Open ${currentProject.displayUrl}'),
-                          onPressed: () async {
-                            final uri = Uri.parse(currentProject.displayUrl);
-                            if (await canLaunchUrl(uri)) await launchUrl(uri);
-                          },
-                        ),
-                      ],
+                      ),
                     ],
                   ),
+                ),
+                if (currentProject != null) ...[
+                  const SizedBox(width: 16),
+                  Flexible(
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      alignment: WrapAlignment.end,
+                      children: [
+                        if (!isRunning) ...[
+                          TactilePress(
+                            onTap: () => projectsProvider.startProject(currentProject, processProvider),
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.successGreen),
+                              icon: const Icon(Icons.play_arrow, size: 16),
+                              label: const Text('Start Project'),
+                              onPressed: () => projectsProvider.startProject(currentProject, processProvider),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.download_for_offline_outlined, size: 16),
+                            label: const Text('Install Dependencies'),
+                            onPressed: () => projectsProvider.reinstallDependencies(currentProject, processProvider),
+                          ),
+                        ] else ...[
+                          TactilePress(
+                            onTap: () => projectsProvider.stopProject(currentProject, processProvider),
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.errorRed),
+                              icon: const Icon(Icons.stop, size: 16),
+                              label: const Text('Stop Project'),
+                              onPressed: () => projectsProvider.stopProject(currentProject, processProvider),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.refresh, size: 16),
+                            label: const Text('Restart'),
+                            onPressed: () => projectsProvider.restartProject(currentProject, processProvider),
+                          ),
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.download_for_offline_outlined, size: 16),
+                            label: const Text('Reinstall Deps'),
+                            onPressed: () => projectsProvider.reinstallDependencies(currentProject, processProvider),
+                          ),
+                          TactilePress(
+                            onTap: () async {
+                              final uri = Uri.parse(currentProject.displayUrl);
+                              if (await canLaunchUrl(uri)) await launchUrl(uri);
+                            },
+                            child: ElevatedButton.icon(
+                              icon: const Icon(Icons.open_in_browser, size: 16),
+                              label: Text('Open ${currentProject.displayUrl}'),
+                              onPressed: () async {
+                                final uri = Uri.parse(currentProject.displayUrl);
+                                if (await canLaunchUrl(uri)) await launchUrl(uri);
+                              },
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
 
@@ -159,12 +181,19 @@ class _RunningScreenState extends State<RunningScreen> {
                     final active = p.status == ProjectState.running;
                     return ChoiceChip(
                       selected: isSel,
-                      avatar: Icon(
-                        active ? Icons.play_circle_fill : Icons.stop_circle_outlined,
-                        color: active ? AppTheme.successGreen : Colors.grey,
-                        size: 14,
+                      avatar: active
+                          ? const Center(
+                              child: PulsingLiveDot(color: AppTheme.successGreen, size: 7),
+                            )
+                          : const Icon(
+                              Icons.stop_circle_outlined,
+                              color: Colors.grey,
+                              size: 14,
+                            ),
+                      label: Text(
+                        '${p.name} (Port ${p.port})',
+                        style: AppTheme.tabularNumberStyle.copyWith(fontSize: 12.5),
                       ),
-                      label: Text('${p.name} (Port ${p.port})'),
                       onSelected: (_) => setState(() => _selectedProjectId = p.id),
                     );
                   },
@@ -177,9 +206,9 @@ class _RunningScreenState extends State<RunningScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
-                    color: AppTheme.darkCard,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppTheme.darkBorder),
+                    color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Theme.of(context).dividerColor),
                   ),
                   child: Row(
                     children: [
@@ -192,13 +221,27 @@ class _RunningScreenState extends State<RunningScreen> {
                       const SizedBox(width: 16),
                       Text(
                         'Local: ${currentProject.displayUrl}',
-                        style: const TextStyle(color: AppTheme.accentCyan, fontFamily: 'monospace', fontSize: 12),
+                        style: AppTheme.tabularNumberStyle.copyWith(
+                          color: AppTheme.accentCyan,
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
                       ),
-                      const Spacer(),
-                      Text(
-                        'Path: ${currentProject.localPath}',
-                        style: const TextStyle(color: Colors.grey, fontSize: 11, fontFamily: 'monospace'),
-                        overflow: TextOverflow.ellipsis,
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Tooltip(
+                          message: currentProject.localPath,
+                          child: Text(
+                            'Path: ${currentProject.localPath}',
+                            textAlign: TextAlign.end,
+                            style: TextStyle(
+                              color: Theme.of(context).textTheme.bodyMedium?.color,
+                              fontSize: 11,
+                              fontFamily: 'monospace',
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       ),
                     ],
                   ),

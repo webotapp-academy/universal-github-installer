@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../core/constants/supported_technologies.dart';
 import '../../core/models/installation_plan.dart';
@@ -11,6 +12,7 @@ import '../../state/process_provider.dart';
 import '../../state/projects_provider.dart';
 import '../../state/runtime_provider.dart';
 import '../widgets/command_approval_dialog.dart';
+import '../widgets/tactile_press.dart';
 import '../widgets/terminal_view.dart';
 
 class InstallScreen extends StatefulWidget {
@@ -209,34 +211,72 @@ class _InstallScreenState extends State<InstallScreen> {
                     Row(
                       children: [
                         Expanded(
-                          child: TextField(
-                            controller: _urlController,
-                            enabled: !isBusy,
-                            onChanged: projectsProvider.setActiveInstallUrl,
-                            decoration: const InputDecoration(
-                              hintText: 'https://github.com/username/project-name',
-                              prefixIcon: Icon(Icons.link),
-                            ),
-                            onSubmitted: (_) => _startAnalysis(),
+                          child: ListenableBuilder(
+                            listenable: _urlController,
+                            builder: (context, _) {
+                              final hasText = _urlController.text.isNotEmpty;
+                              return TextField(
+                                controller: _urlController,
+                                enabled: !isBusy,
+                                onChanged: projectsProvider.setActiveInstallUrl,
+                                decoration: InputDecoration(
+                                  hintText: 'https://github.com/username/project-name',
+                                  prefixIcon: const Icon(Icons.link),
+                                  suffixIcon: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (hasText && !isBusy)
+                                        IconButton(
+                                          tooltip: 'Clear URL',
+                                          icon: const Icon(Icons.close, size: 17),
+                                          onPressed: () {
+                                            _urlController.clear();
+                                            projectsProvider.setActiveInstallUrl('');
+                                          },
+                                        ),
+                                      if (!isBusy)
+                                        IconButton(
+                                          tooltip: 'Paste GitHub URL from clipboard',
+                                          icon: const Icon(Icons.content_paste_rounded, size: 17),
+                                          onPressed: () async {
+                                            final data = await Clipboard.getData(Clipboard.kTextPlain);
+                                            final text = data?.text?.trim() ?? '';
+                                            if (text.isNotEmpty) {
+                                              _urlController.text = text;
+                                              projectsProvider.setActiveInstallUrl(text);
+                                            }
+                                          },
+                                        ),
+                                      const SizedBox(width: 4),
+                                    ],
+                                  ),
+                                ),
+                                onSubmitted: (_) => _startAnalysis(),
+                              );
+                            },
                           ),
                         ),
                         const SizedBox(width: 14),
-                        ElevatedButton.icon(
-                          icon: isAnalyzing
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                )
-                              : const Icon(Icons.analytics_outlined),
-                          label: Text(isAnalyzing ? 'Analyzing...' : 'Analyze Repository'),
-                          onPressed: isBusy ? null : _startAnalysis,
+                        TactilePress(
+                          onTap: isBusy ? null : _startAnalysis,
+                          child: ElevatedButton.icon(
+                            icon: isAnalyzing
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                  )
+                                : const Icon(Icons.analytics_outlined),
+                            label: Text(isAnalyzing ? 'Analyzing...' : 'Analyze Repository'),
+                            onPressed: isBusy ? null : _startAnalysis,
+                          ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
+                      runSpacing: 8,
                       children: [
                         ActionChip(
                           avatar: const Icon(Icons.code, size: 14),
@@ -275,119 +315,184 @@ class _InstallScreenState extends State<InstallScreen> {
               ),
             ),
 
-            if (projectsProvider.analysisError != null) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppTheme.errorRed.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.errorRed),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.error_outline, color: AppTheme.errorRed),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        projectsProvider.analysisError!,
-                        style: const TextStyle(color: AppTheme.errorRed),
-                      ),
-                    ),
-                  ],
+            AnimatedSwitcher(
+              duration: MediaQuery.maybeDisableAnimationsOf(context) == true
+                  ? Duration.zero
+                  : AppMotion.uiDuration,
+              switchInCurve: AppMotion.easeOut,
+              switchOutCurve: AppMotion.easeOut,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.97, end: 1.0).animate(animation),
+                  alignment: Alignment.topCenter,
+                  child: child,
                 ),
               ),
-            ],
-
-            // Analysis Results Display
-            if (analysis != null) ...[
-              const SizedBox(height: 24),
-              const Text(
-                'Repository Analysis & Execution Plan',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Project Name field
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _nameController,
-                              enabled: !isInstalling,
-                              onChanged: projectsProvider.setActiveProjectName,
-                              decoration: const InputDecoration(
-                                labelText: 'Project Display Name',
-                                prefixIcon: Icon(Icons.title),
+              child: projectsProvider.analysisError == null
+                  ? const SizedBox.shrink(key: ValueKey('no-analysis-error'))
+                  : Padding(
+                      key: ValueKey('error-${projectsProvider.analysisError}'),
+                      padding: const EdgeInsets.only(top: 16),
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: AppTheme.errorRed.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.errorRed.withValues(alpha: 0.65)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.error_outline, color: AppTheme.errorRed),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                projectsProvider.analysisError!,
+                                style: const TextStyle(color: AppTheme.errorRed),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 16),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppTheme.successGreen,
-                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-                            ),
-                            icon: isInstalling
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                  )
-                                : const Icon(Icons.rocket_launch),
-                            label: Text(
-                              isInstalling ? 'Installing...' : 'Install & Run',
-                              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                            ),
-                            onPressed: isBusy ? null : () => _runInstallation(analysis),
-                          ),
-                        ],
+                            if (projectsProvider.analysisError!.contains('Token') ||
+                                projectsProvider.analysisError!.contains('Settings') ||
+                                projectsProvider.analysisError!.contains('404')) ...[
+                              const SizedBox(width: 12),
+                              OutlinedButton.icon(
+                                icon: const Icon(Icons.key_rounded, size: 15),
+                                label: const Text('Open Settings'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppTheme.errorRed,
+                                  side: BorderSide(color: AppTheme.errorRed.withValues(alpha: 0.5)),
+                                ),
+                                onPressed: () => context.read<AppState>().setTab(NavigationTab.settings),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
+                    ),
+            ),
 
-                      const SizedBox(height: 20),
-                      const Divider(height: 1),
-                      const SizedBox(height: 16),
+            // Analysis Results Display
+            AnimatedSwitcher(
+              duration: MediaQuery.maybeDisableAnimationsOf(context) == true
+                  ? Duration.zero
+                  : AppMotion.uiDuration,
+              switchInCurve: AppMotion.easeOut,
+              switchOutCurve: AppMotion.easeOut,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.97, end: 1.0).animate(animation),
+                  alignment: Alignment.topCenter,
+                  child: child,
+                ),
+              ),
+              child: analysis == null
+                  ? const SizedBox.shrink(key: ValueKey('no-analysis'))
+                  : Column(
+                      key: ValueKey('analysis-${analysis.repoPath}'),
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 24),
+                        const Text(
+                          'Repository Analysis & Execution Plan',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 12),
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Project Name field
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _nameController,
+                                        enabled: !isInstalling,
+                                        onChanged: projectsProvider.setActiveProjectName,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Project Display Name',
+                                          prefixIcon: Icon(Icons.title),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    TactilePress(
+                                      onTap: isBusy ? null : () => _runInstallation(analysis),
+                                      child: ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppTheme.successGreen,
+                                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                                        ),
+                                        icon: isInstalling
+                                            ? const SizedBox(
+                                                width: 16,
+                                                height: 16,
+                                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                              )
+                                            : const Icon(Icons.rocket_launch),
+                                        label: Text(
+                                          isInstalling ? 'Installing...' : 'Install & Run',
+                                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                                        ),
+                                        onPressed: isBusy ? null : () => _runInstallation(analysis),
+                                      ),
+                                    ),
+                                  ],
+                                ),
 
-                      // Tech Spec Grid
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: _detailTile(
-                              title: 'Language',
-                              value: analysis.techStack.language.displayName,
-                              icon: Icons.code,
-                            ),
-                          ),
-                          Expanded(
-                            child: _detailTile(
-                              title: 'Framework',
-                              value: analysis.techStack.framework.displayName,
-                              icon: Icons.layers,
-                            ),
-                          ),
-                          Expanded(
-                            child: _detailTile(
-                              title: 'Database Requirement',
-                              value: analysis.techStack.databaseRequirement.displayName,
-                              icon: Icons.storage,
-                            ),
-                          ),
-                          Expanded(
-                            child: _detailTile(
-                              title: 'Target Port',
-                              value: '${analysis.techStack.recommendedPort}',
-                              icon: Icons.numbers,
-                            ),
-                          ),
-                        ],
-                      ),
+                                const SizedBox(height: 20),
+                                const Divider(height: 1),
+                                const SizedBox(height: 16),
+
+                                // Tech Spec Grid (responsive)
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final tiles = [
+                                      _detailTile(
+                                        title: 'Language',
+                                        value: analysis.techStack.language.displayName,
+                                        icon: Icons.code,
+                                      ),
+                                      _detailTile(
+                                        title: 'Framework',
+                                        value: analysis.techStack.framework.displayName,
+                                        icon: Icons.layers,
+                                      ),
+                                      _detailTile(
+                                        title: 'Database Requirement',
+                                        value: analysis.techStack.databaseRequirement.displayName,
+                                        icon: Icons.storage,
+                                      ),
+                                      _detailTile(
+                                        title: 'Target Port',
+                                        value: '${analysis.techStack.recommendedPort}',
+                                        icon: Icons.numbers,
+                                        tabular: true,
+                                      ),
+                                    ];
+                                    if (constraints.maxWidth >= 680) {
+                                      return Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          for (final t in tiles) Expanded(child: t),
+                                        ],
+                                      );
+                                    }
+                                    return Wrap(
+                                      spacing: 24,
+                                      runSpacing: 14,
+                                      children: tiles
+                                          .map((t) => SizedBox(
+                                                width: (constraints.maxWidth - 24) / 2,
+                                                child: t,
+                                              ))
+                                          .toList(),
+                                    );
+                                  },
+                                ),
 
                       const SizedBox(height: 16),
 
@@ -415,14 +520,20 @@ class _InstallScreenState extends State<InstallScreen> {
                         ),
                         const SizedBox(height: 4),
                         Container(
+                          width: double.infinity,
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: Colors.black12,
+                            color: Theme.of(context).brightness == Brightness.dark
+                                ? Colors.black26
+                                : Colors.black.withValues(alpha: 0.04),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
                             analysis.readmeSummary,
-                            style: const TextStyle(fontSize: 12, color: Colors.grey),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).textTheme.bodyMedium?.color,
+                            ),
                           ),
                         ),
                       ],
@@ -430,7 +541,9 @@ class _InstallScreenState extends State<InstallScreen> {
                   ),
                 ),
               ),
-            ],
+              ],
+            ),
+            ),
 
             if (projectsProvider.installStage != InstallFlowStage.idle ||
                 projectsProvider.installLogs.isNotEmpty) ...[
@@ -528,7 +641,7 @@ class _InstallScreenState extends State<InstallScreen> {
                     ? null
                     : (isDone ? 1.0 : (activeIdx > 0 ? activeIdx / 5.0 : 0.0)),
                 minHeight: 5,
-                backgroundColor: Colors.white10,
+                backgroundColor: Theme.of(context).dividerColor.withValues(alpha: 0.35),
                 valueColor: AlwaysStoppedAnimation<Color>(
                   isFailed
                       ? AppTheme.errorRed
@@ -566,41 +679,48 @@ class _InstallScreenState extends State<InstallScreen> {
     required bool isActive,
     required bool isFailed,
   }) {
+    final muted = Theme.of(context).textTheme.bodyMedium?.color ?? Colors.grey;
     final Color color = isFailed
         ? AppTheme.errorRed
         : isCompleted
             ? AppTheme.successGreen
             : isActive
                 ? AppTheme.accentCyan
-                : Colors.white38;
+                : muted.withValues(alpha: 0.7);
+    final disableAnim = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
-    return Container(
+    return AnimatedContainer(
+      duration: disableAnim ? Duration.zero : AppMotion.uiDuration,
+      curve: AppMotion.easeOut,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withValues(alpha: 0.45)),
+        color: color.withValues(alpha: (isActive || isCompleted || isFailed) ? 0.13 : 0.05),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(
+          color: color.withValues(alpha: (isActive || isCompleted || isFailed) ? 0.5 : 0.25),
+        ),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            isFailed
-                ? Icons.close
-                : isCompleted
-                    ? Icons.check_circle
-                    : isActive
-                        ? Icons.sync
-                        : Icons.radio_button_unchecked,
-            size: 13,
-            color: color,
-          ),
+          if (isActive)
+            PulsingLiveDot(color: color, size: 7)
+          else
+            Icon(
+              isFailed
+                  ? Icons.close
+                  : isCompleted
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked,
+              size: 13,
+              color: color,
+            ),
           const SizedBox(width: 5),
           Flexible(
             child: Text(
               '$index. $label',
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
+              style: AppTheme.tabularNumberStyle.copyWith(
                 fontSize: 11.5,
                 fontWeight: isActive || isCompleted ? FontWeight.w600 : FontWeight.normal,
                 color: color,
@@ -612,7 +732,12 @@ class _InstallScreenState extends State<InstallScreen> {
     );
   }
 
-  Widget _detailTile({required String title, required String value, required IconData icon}) {
+  Widget _detailTile({
+    required String title,
+    required String value,
+    required IconData icon,
+    bool tabular = false,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -620,11 +745,22 @@ class _InstallScreenState extends State<InstallScreen> {
           children: [
             Icon(icon, size: 14, color: AppTheme.accentCyan),
             const SizedBox(width: 6),
-            Text(title, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+            Flexible(
+              child: Text(
+                title,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 4),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+        Text(
+          value,
+          style: tabular
+              ? AppTheme.tabularNumberStyle.copyWith(fontWeight: FontWeight.bold, fontSize: 14)
+              : const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+        ),
       ],
     );
   }

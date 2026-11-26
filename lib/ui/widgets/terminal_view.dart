@@ -53,12 +53,22 @@ class _TerminalViewState extends State<TerminalView> {
     );
   }
 
+  Color _lineColor(LogEntry log) {
+    if (log.isError) return const Color(0xFFFDA4AF);
+    final t = log.text;
+    if (t.startsWith('✓') || t.startsWith('🚀')) return const Color(0xFF6EE7B7);
+    if (t.startsWith('⚠️') || t.startsWith('ℹ️')) return const Color(0xFFFCD34D);
+    if (t.startsWith('>>>') || t.startsWith('⚙️') || t.startsWith('🔍')) return const Color(0xFFA5B4FC);
+    if (t.startsWith('⬇️') || t.startsWith('📦') || t.startsWith('   ↳')) return const Color(0xFF5EEAD4);
+    return const Color(0xFFE2E8F0);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         color: AppTheme.darkTerminal,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppTheme.darkBorder),
       ),
       child: Column(
@@ -66,28 +76,32 @@ class _TerminalViewState extends State<TerminalView> {
         children: [
           // Header Bar
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
             decoration: const BoxDecoration(
-              color: Color(0xFF1E1E2E),
+              color: Color(0xFF13131A),
               borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(10),
-                topRight: Radius.circular(10),
+                topLeft: Radius.circular(12),
+                topRight: Radius.circular(12),
               ),
+              border: Border(bottom: BorderSide(color: AppTheme.darkBorder)),
             ),
             child: Row(
               children: [
-                const Icon(Icons.terminal, size: 16, color: AppTheme.accentCyan),
+                const Icon(Icons.terminal_rounded, size: 15, color: AppTheme.accentCyan),
                 const SizedBox(width: 8),
-                Text(
-                  widget.title,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'monospace',
+                Expanded(
+                  child: Text(
+                    widget.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'monospace',
+                    ),
                   ),
                 ),
-                const Spacer(),
                 IconButton(
                   icon: Icon(
                     _autoScroll ? Icons.vertical_align_bottom : Icons.pause,
@@ -135,9 +149,9 @@ class _TerminalViewState extends State<TerminalView> {
                           children: [
                             Text(
                               '[$time] ',
-                              style: const TextStyle(
+                              style: AppTheme.tabularNumberStyle.copyWith(
                                 color: Colors.white38,
-                                fontSize: 12,
+                                fontSize: 11.5,
                                 fontFamily: 'monospace',
                               ),
                             ),
@@ -145,10 +159,10 @@ class _TerminalViewState extends State<TerminalView> {
                               child: SelectableText(
                                 log.text,
                                 style: TextStyle(
-                                  color: log.isError ? const Color(0xFFF87171) : const Color(0xFFE2E8F0),
+                                  color: _lineColor(log),
                                   fontSize: 12.5,
                                   fontFamily: 'monospace',
-                                  height: 1.4,
+                                  height: 1.45,
                                 ),
                               ),
                             ),

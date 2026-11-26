@@ -6,6 +6,7 @@ import '../../state/projects_provider.dart';
 import '../../state/runtime_provider.dart';
 import '../../state/tunnel_provider.dart';
 import '../widgets/project_card.dart';
+import '../widgets/tactile_press.dart';
 import '../widgets/webotapp_catalog_section.dart';
 
 class DashboardScreen extends StatelessWidget {
@@ -23,46 +24,58 @@ class DashboardScreen extends StatelessWidget {
       required String value,
       required IconData icon,
       required Color color,
+      bool isLive = false,
       VoidCallback? onTap,
     }) {
-      return Expanded(
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
-          child: Card(
-            child: Padding(
-              padding: const EdgeInsets.all(18),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(icon, color: color, size: 26),
+      return TactilePress(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          value,
-                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          title,
-                          style: const TextStyle(color: Colors.grey, fontSize: 13),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
+                  child: Icon(icon, color: color, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              value,
+                              style: AppTheme.tabularNumberStyle.copyWith(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (isLive) ...[
+                            const SizedBox(width: 8),
+                            PulsingLiveDot(color: color, size: 7),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        title,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12.5),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -97,51 +110,75 @@ class DashboardScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 16),
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Install New Project'),
-                  onPressed: () => appState.setTab(NavigationTab.installNew),
+                TactilePress(
+                  onTap: () => appState.setTab(NavigationTab.installNew),
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Install New Project'),
+                    onPressed: () => appState.setTab(NavigationTab.installNew),
+                  ),
                 ),
               ],
             ),
 
             const SizedBox(height: 24),
 
-            // Metrics row
-            Row(
-              children: [
-                metricCard(
-                  title: 'Installed Projects',
-                  value: '${projectsProvider.projects.length}',
-                  icon: Icons.folder,
-                  color: AppTheme.primaryBlue,
-                  onTap: () => appState.setTab(NavigationTab.myProjects),
-                ),
-                const SizedBox(width: 14),
-                metricCard(
-                  title: 'Running Locally',
-                  value: '${projectsProvider.runningCount}',
-                  icon: Icons.play_circle_filled,
-                  color: AppTheme.successGreen,
-                  onTap: () => appState.setTab(NavigationTab.runningProjects),
-                ),
-                const SizedBox(width: 14),
-                metricCard(
-                  title: 'Active Tunnels',
-                  value: '${tunnelProvider.activeTunnels.length}',
-                  icon: Icons.public,
-                  color: AppTheme.accentCyan,
-                  onTap: () => appState.setTab(NavigationTab.tunnelManager),
-                ),
-                const SizedBox(width: 14),
-                metricCard(
-                  title: 'Runtimes Detected',
-                  value: '${runtimeProvider.installedCount}',
-                  icon: Icons.miscellaneous_services,
-                  color: AppTheme.warningOrange,
-                  onTap: () => appState.setTab(NavigationTab.runtimeManager),
-                ),
-              ],
+            // Metrics row (responsive: 4-col wide, 2x2 narrow)
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final cards = [
+                  metricCard(
+                    title: 'Installed Projects',
+                    value: '${projectsProvider.projects.length}',
+                    icon: Icons.folder_rounded,
+                    color: AppTheme.primaryBlue,
+                    onTap: () => appState.setTab(NavigationTab.myProjects),
+                  ),
+                  metricCard(
+                    title: 'Running Locally',
+                    value: '${projectsProvider.runningCount}',
+                    icon: Icons.play_circle_filled_rounded,
+                    color: AppTheme.successGreen,
+                    isLive: projectsProvider.runningCount > 0,
+                    onTap: () => appState.setTab(NavigationTab.runningProjects),
+                  ),
+                  metricCard(
+                    title: 'Active Tunnels',
+                    value: '${tunnelProvider.activeTunnels.length}',
+                    icon: Icons.public_rounded,
+                    color: AppTheme.accentCyan,
+                    isLive: tunnelProvider.activeTunnels.isNotEmpty,
+                    onTap: () => appState.setTab(NavigationTab.tunnelManager),
+                  ),
+                  metricCard(
+                    title: 'Runtimes Detected',
+                    value: '${runtimeProvider.installedCount}',
+                    icon: Icons.miscellaneous_services_rounded,
+                    color: AppTheme.warningOrange,
+                    onTap: () => appState.setTab(NavigationTab.runtimeManager),
+                  ),
+                ];
+
+                if (constraints.maxWidth >= 820) {
+                  return Row(
+                    children: [
+                      for (int i = 0; i < cards.length; i++) ...[
+                        Expanded(child: cards[i]),
+                        if (i < cards.length - 1) const SizedBox(width: 14),
+                      ],
+                    ],
+                  );
+                }
+
+                final halfWidth = (constraints.maxWidth - 14) / 2;
+                return Wrap(
+                  spacing: 14,
+                  runSpacing: 14,
+                  children: cards
+                      .map((c) => SizedBox(width: halfWidth > 180 ? halfWidth : constraints.maxWidth, child: c))
+                      .toList(),
+                );
+              },
             ),
 
             const SizedBox(height: 28),

@@ -8,6 +8,7 @@ import '../../state/app_state.dart';
 import '../../state/process_provider.dart';
 import '../../state/projects_provider.dart';
 import 'status_badge.dart';
+import 'tactile_press.dart';
 
 class ProjectCard extends StatelessWidget {
   final Project project;
@@ -72,16 +73,22 @@ class ProjectCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.blueGrey.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(6),
+                    color: AppTheme.accentCyan.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.accentCyan.withValues(alpha: 0.3)),
                   ),
                   child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.link, size: 14, color: AppTheme.accentCyan),
-                      const SizedBox(width: 4),
+                      const Icon(Icons.link_rounded, size: 14, color: AppTheme.accentCyan),
+                      const SizedBox(width: 5),
                       Text(
                         'Port ${project.port}',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                        style: AppTheme.tabularNumberStyle.copyWith(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.accentCyan,
+                        ),
                       ),
                     ],
                   ),
@@ -124,61 +131,69 @@ class ProjectCard extends StatelessWidget {
             const Divider(height: 1),
             const SizedBox(height: 10),
 
-            // Action Buttons
+            // Action Buttons (Wrap prevents horizontal overflow on narrower widths)
             Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                if (!isRunning)
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.play_arrow, size: 16),
-                    label: const Text('Start'),
-                    onPressed: () => projectsProvider.startProject(project, processProvider),
-                  )
-                else ...[
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.errorRed),
-                    icon: const Icon(Icons.stop, size: 16),
-                    label: const Text('Stop'),
-                    onPressed: () => projectsProvider.stopProject(project, processProvider),
+                Expanded(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (!isRunning)
+                        TactilePress(
+                          onTap: () => projectsProvider.startProject(project, processProvider),
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.successGreen),
+                            icon: const Icon(Icons.play_arrow_rounded, size: 17),
+                            label: const Text('Start'),
+                            onPressed: () => projectsProvider.startProject(project, processProvider),
+                          ),
+                        )
+                      else ...[
+                        TactilePress(
+                          onTap: () => projectsProvider.stopProject(project, processProvider),
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.errorRed),
+                            icon: const Icon(Icons.stop_rounded, size: 17),
+                            label: const Text('Stop'),
+                            onPressed: () => projectsProvider.stopProject(project, processProvider),
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.refresh_rounded, size: 16),
+                          label: const Text('Restart'),
+                          onPressed: () => projectsProvider.restartProject(project, processProvider),
+                        ),
+                      ],
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.open_in_browser_rounded, size: 16),
+                        label: const Text('Open Browser'),
+                        onPressed: () async {
+                          final uri = Uri.parse(project.displayUrl);
+                          if (await canLaunchUrl(uri)) {
+                            await launchUrl(uri);
+                          }
+                        },
+                      ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.terminal_rounded, size: 16),
+                        label: const Text('Logs'),
+                        onPressed: () {
+                          appState.setTab(NavigationTab.runningProjects, projectId: project.id);
+                        },
+                      ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.public_rounded, size: 16),
+                        label: const Text('Expose'),
+                        onPressed: () {
+                          appState.setTab(NavigationTab.tunnelManager, projectId: project.id);
+                        },
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.refresh, size: 16),
-                    label: const Text('Restart'),
-                    onPressed: () => projectsProvider.restartProject(project, processProvider),
-                  ),
-                ],
-
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.open_in_browser, size: 16),
-                  label: const Text('Open Browser'),
-                  onPressed: () async {
-                    final uri = Uri.parse(project.displayUrl);
-                    if (await canLaunchUrl(uri)) {
-                      await launchUrl(uri);
-                    }
-                  },
                 ),
-
                 const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.terminal, size: 16),
-                  label: const Text('Logs'),
-                  onPressed: () {
-                    appState.setTab(NavigationTab.runningProjects, projectId: project.id);
-                  },
-                ),
-
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.public, size: 16),
-                  label: const Text('Expose'),
-                  onPressed: () {
-                    appState.setTab(NavigationTab.tunnelManager, projectId: project.id);
-                  },
-                ),
-
-                const Spacer(),
 
                 PopupMenuButton<String>(
                   icon: const Icon(Icons.more_vert),
